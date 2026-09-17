@@ -1088,7 +1088,6 @@ struct BridgeInfo {
     token: String,
 }
 
-#[derive(Default)]
 struct BridgeShared {
     info: Mutex<Option<BridgeInfo>>,
     token: Mutex<String>,
@@ -1486,60 +1485,67 @@ fn handle_bridge_request<R: tauri::Runtime>(
 }
 
 fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    let result = (|| -> Result<(), String> {
-        let shared = std::sync::Arc::new(BridgeShared {
-            info: Mutex::new(None),
-            token: Mutex::new(random_bridge_token()),
-        });
-        // Managed before binding so the settings commands answer cleanly
-        // even when no bridge port could be opened.
-        app.manage(shared.clone());
-        app.manage(BridgePairing::default());
+    // Managed unconditionally and as the plain value type (not Arc) so the
+    // `tauri::State<BridgeShared>` command parameters can find it even when
+    // no port could be bound.
+    app.manage(BridgeShared {
+        info: Mutex::new(None),
+        token: Mutex::new(random_bridge_token()),
+    });
+    app.manage(BridgePairing::default());
 
-        let mut bound = None;
-        let mut last_bind_error = String::new();
-        for port in BRIDGE_PORT_RANGE {
-            match tiny_http::Server::http((BRIDGE_HOST, port)) {
-                Ok(server) => {
-                    bound = Some((server, port));
+    let mut bound = None;
+    let mut last_bind_error = String::new();
+    for port in BRIDGE_PORT_RANGE {
+        match tiny_http::Server::http((BRIDGE_HOST, port)) {
+            Ok(server) => {
+                bound = Some((server, port));
+                break;
+            }
+            Err(err) => last_bind_error = err.to_string(),
+        }
+    }
+    let Some((server, port)) = bound else {
+        eprintln!(
+            "Failed to start browser bridge: no port available in {}-{}: {last_bind_error}",
+            BRIDGE_PORT_RANGE.start(),
+            BRIDGE_PORT_RANGE.end()
+        );
+        return;
+    };
+
+    let info = BridgeInfo {
+        port,
+        token: app
+            .state::<BridgeShared>()
+            .token
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default(),
+    };
+    if let Err(err) = persist_bridge_info(&info) {
+        eprintln!("Failed to persist bridge info: {err}");
+    }
+    if let Ok(mut guard) = app.state::<BridgeShared>().info.lock() {
+        *guard = Some(info);
+    }
+
+    let server = std::sync::Arc::new(server);
+    for worker in 0..3 {
+        let server = server.clone();
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            match server.recv() {
+                Ok(request) => {
+                    let shared = app.state::<BridgeShared>();
+                    handle_bridge_request(&app, &shared, request);
+                }
+                Err(err) => {
+                    eprintln!("Bridge worker {worker} stopped: {err}");
                     break;
                 }
-                Err(err) => last_bind_error = err.to_string(),
             }
-        }
-        let Some((server, port)) = bound else {
-            return Err(format!(
-                "No bridge port available in {}-{}: {last_bind_error}",
-                BRIDGE_PORT_RANGE.start(),
-                BRIDGE_PORT_RANGE.end()
-            ));
-        };
-        let info = BridgeInfo { port, token: shared.token.lock().map_err(|_| "Bridge lock poisoned".to_string())?.clone() };
-        persist_bridge_info(&info)?;
-        if let Ok(mut guard) = shared.info.lock() {
-            *guard = Some(info.clone());
-        }
-
-        let server = std::sync::Arc::new(server);
-        for worker in 0..3 {
-            let server = server.clone();
-            let shared = shared.clone();
-            let app = app.clone();
-            std::thread::spawn(move || loop {
-                match server.recv() {
-                    Ok(request) => handle_bridge_request(&app, &shared, request),
-                    Err(err) => {
-                        eprintln!("Bridge worker {worker} stopped: {err}");
-                        break;
-                    }
-                }
-            });
-        }
-        Ok(())
-    })();
-
-    if let Err(err) = result {
-        eprintln!("Failed to start browser bridge: {err}");
+        });
     }
 }
 
