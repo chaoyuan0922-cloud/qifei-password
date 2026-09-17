@@ -42,6 +42,7 @@ async function bridgeRequest(path, { method = 'GET', body } = {}) {
   const candidates = cached ? [cached, ...buildCandidates().filter((entry) => entry !== cached)] : buildCandidates();
 
   let lastError = null;
+  let sawUnauthorized = false;
   for (const entry of candidates) {
     try {
       const result = await fetchJson(`http://${entry.startsWith('http') ? entry.slice(7) : entry}${path}`, {
@@ -53,16 +54,20 @@ async function bridgeRequest(path, { method = 'GET', body } = {}) {
         body: body ? JSON.stringify(body) : undefined,
       });
       if (result.status === 401) {
-        throw new Error('UNAUTHORIZED');
+        // Another app instance with a different token may own this port;
+        // keep scanning for the one that matches our token.
+        sawUnauthorized = true;
+        continue;
       }
       const [host, port] = entry.replace(/^https?:\/\//, '').split(':');
       await storageSet({ bridgePort: Number(port), bridgeHost: `http://${host}` });
       return result;
     } catch (err) {
-      if (err.message === 'UNAUTHORIZED' || err.message === 'NOT_PAIRED') throw err;
+      if (err.message === 'NOT_PAIRED') throw err;
       lastError = err;
     }
   }
+  if (sawUnauthorized) throw new Error('UNAUTHORIZED');
   throw lastError || new Error('BRIDGE_UNREACHABLE');
 }
 

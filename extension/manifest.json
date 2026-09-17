@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FlyPassword 自动填充",
   "short_name": "FlyPassword",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "起飞密码箱浏览器自动填充：登录凭据与 MFA 验证码一键填入。",
   "icons": {
     "32": "icons/icon32.png",
