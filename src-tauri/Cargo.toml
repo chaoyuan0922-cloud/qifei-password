@@ -1,6 +1,6 @@
 [package]
 name = "captain-password"
-version = "0.1.7"
+version = "0.1.8"
 description = "Local password vault desktop app"
 authors = ["zhangya"]
 license = ""

@@ -1,7 +1,7 @@
 // CaptainPassword browser extension - background service worker.
 // Bridges content scripts / popup to the desktop app's local HTTP bridge.
 
-const PORT_CANDIDATES = [27124, 27125, 27126, 27127, 27128, 27129, 27130, 27131];
+const PORT_CANDIDATES = Array.from({ length: 40 }, (_, index) => 27124 + index);
 const HOST_CANDIDATES = ['http://127.0.0.1', 'http://localhost'];
 
 const lastFilledByTab = new Map();

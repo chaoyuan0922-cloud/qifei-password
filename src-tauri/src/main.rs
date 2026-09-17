@@ -1076,7 +1076,7 @@ fn set_quick_access_shortcut<R: tauri::Runtime>(
 // ===== Browser extension bridge =====
 
 const BRIDGE_HOST: &str = "127.0.0.1";
-const BRIDGE_PORT_CANDIDATES: [u16; 8] = [27124, 27125, 27126, 27127, 27128, 27129, 27130, 27131];
+const BRIDGE_PORT_RANGE: std::ops::RangeInclusive<u16> = 27124..=27163;
 const BRIDGE_MAX_BODY_BYTES: u64 = 64 * 1024;
 const BRIDGE_PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 const BRIDGE_ALLOWED_ORIGINS_KEY: &str = "bridge_allowed_origins";
@@ -1497,14 +1497,22 @@ fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         app.manage(BridgePairing::default());
 
         let mut bound = None;
-        for port in BRIDGE_PORT_CANDIDATES {
-            if let Ok(server) = tiny_http::Server::http((BRIDGE_HOST, port)) {
-                bound = Some((server, port));
-                break;
+        let mut last_bind_error = String::new();
+        for port in BRIDGE_PORT_RANGE {
+            match tiny_http::Server::http((BRIDGE_HOST, port)) {
+                Ok(server) => {
+                    bound = Some((server, port));
+                    break;
+                }
+                Err(err) => last_bind_error = err.to_string(),
             }
         }
         let Some((server, port)) = bound else {
-            return Err("No free bridge port available".to_string());
+            return Err(format!(
+                "No bridge port available in {}-{}: {last_bind_error}",
+                BRIDGE_PORT_RANGE.start(),
+                BRIDGE_PORT_RANGE.end()
+            ));
         };
         let info = BridgeInfo { port, token: shared.token.lock().map_err(|_| "Bridge lock poisoned".to_string())?.clone() };
         persist_bridge_info(&info)?;
@@ -1617,13 +1625,19 @@ fn respond_bridge_pairing(
     Ok(())
 }
 
+fn display_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    // Strip the Windows verbatim prefix so file pickers and browsers accept it.
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
+}
+
 #[tauri::command]
 fn get_extension_dir<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {
     if cfg!(debug_assertions) {
         let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../extension");
         if dev_dir.is_dir() {
             let canonical = dev_dir.canonicalize().map_err(|err| err.to_string())?;
-            return Ok(canonical.to_string_lossy().to_string());
+            return Ok(display_path(&canonical));
         }
     }
     let resource_dir = app
@@ -1632,7 +1646,7 @@ fn get_extension_dir<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Stri
         .map_err(|_| "Unable to resolve resource directory".to_string())?
         .join("extension");
     if resource_dir.is_dir() {
-        return Ok(resource_dir.to_string_lossy().to_string());
+        return Ok(display_path(&resource_dir));
     }
     let exe_dir = std::env::current_exe()
         .ok()
@@ -1640,7 +1654,7 @@ fn get_extension_dir<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Stri
         .ok_or_else(|| "Unable to resolve executable directory".to_string())?
         .join("extension");
     if exe_dir.is_dir() {
-        return Ok(exe_dir.to_string_lossy().to_string());
+        return Ok(display_path(&exe_dir));
     }
     Err("未找到浏览器扩展文件，请重新安装应用。".to_string())
 }

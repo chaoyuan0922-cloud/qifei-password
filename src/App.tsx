@@ -53,6 +53,7 @@ import {
   PinOff,
   Plus,
   Puzzle,
+  QrCode,
   RefreshCw,
   Search,
   Server,
@@ -70,6 +71,7 @@ import {
 import { useCallback, Component, useEffect, useId, useMemo, useRef, useState, type ErrorInfo } from 'react';
 import type {
   CSSProperties,
+  DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
@@ -79,6 +81,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { openPath } from '@tauri-apps/plugin-opener';
+import jsQR from 'jsqr';
 import { api } from './api';
 import type {
   AppUpdateInfo,
@@ -2522,6 +2525,8 @@ function LoginEditorFields({
   onGeneratorOpenChange: (value: boolean) => void;
   onChange: (patch: Partial<LoginInput>) => void;
 }) {
+  const [qrScanOpen, setQrScanOpen] = useState(false);
+
   return (
     <>
       <EditableFieldGroup>
@@ -2549,12 +2554,174 @@ function LoginEditorFields({
           tone="secondary"
           placeholder="粘贴 otpauth:// 链接或 Base32 密钥（可选）"
           onChange={(totp_secret) => onChange({ totp_secret })}
+          actions={
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="扫描二维码导入 MFA"
+              title="扫描二维码：截图粘贴或选择图片"
+              onClick={() => setQrScanOpen(true)}
+            >
+              <QrCode size={18} />
+            </button>
+          }
         />
       </EditableFieldGroup>
+      {qrScanOpen && (
+        <QrCodeImportModal
+          onClose={() => setQrScanOpen(false)}
+          onImport={(secret) => {
+            onChange({ totp_secret: secret });
+            setQrScanOpen(false);
+          }}
+        />
+      )}
       <WebsiteFields input={input} onChange={onChange} />
       <EditorNotes value={input.notes} onChange={(notes) => onChange({ notes })} />
       <EditorTags tags={input.tags} onChange={(tags) => onChange({ tags })} />
     </>
+  );
+}
+
+function decodeQrCodeFromImageFile(file: File | Blob): Promise<string | null> {
+  return new Promise((resolve) => {
+    const sourceUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) {
+        URL.revokeObjectURL(sourceUrl);
+        resolve(null);
+        return;
+      }
+      context.drawImage(image, 0, 0);
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(sourceUrl);
+      const result = jsQR(imageData.data, imageData.width, imageData.height);
+      resolve(result?.data ?? null);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl);
+      resolve(null);
+    };
+    image.src = sourceUrl;
+  });
+}
+
+function QrCodeImportModal({
+  onClose,
+  onImport,
+}: {
+  onClose: () => void;
+  onImport: (secret: string) => void;
+}) {
+  const [message, setMessage] = useState('');
+  const [scanned, setScanned] = useState('');
+  const [decoding, setDecoding] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onPaste = async (event: ClipboardEvent) => {
+      const item = Array.from(event.clipboardData?.items ?? []).find((entry) =>
+        entry.type.startsWith('image/'),
+      );
+      const file = item?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      await decodeFile(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
+
+  const decodeFile = async (file: File | Blob) => {
+    setDecoding(true);
+    setMessage('');
+    try {
+      const text = await decodeQrCodeFromImageFile(file);
+      if (!text) {
+        setMessage('未在图片中识别到二维码，请换一张试试。');
+        return;
+      }
+      const value = text.trim();
+      const looksLikeOtpauth = value.toLowerCase().startsWith('otpauth://');
+      const looksLikeBase32 = /^[A-Za-z2-7][A-Za-z2-9\s-]{15,}$/.test(value);
+      if (!looksLikeOtpauth && !looksLikeBase32) {
+        setMessage(`二维码内容不是 MFA 配置：${value.slice(0, 60)}`);
+        return;
+      }
+      setScanned(value);
+    } finally {
+      setDecoding(false);
+    }
+  };
+
+  const onDrop = async (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files?.[0];
+    if (file) await decodeFile(file);
+  };
+
+  return (
+    <div className="overlay">
+      <div className="modal-card qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-scan-title">
+        <header className="editor-header">
+          <h2 id="qr-scan-title">扫描 MFA 二维码</h2>
+          <button className="icon-button" aria-label="关闭" onClick={onClose}>
+            <X />
+          </button>
+        </header>
+        {scanned ? (
+          <div className="qr-result">
+            <p className="qr-result-label">已识别到 MFA 密钥：</p>
+            <code className="qr-result-value">{scanned}</code>
+            <div className="pairing-actions">
+              <button className="secondary-button" onClick={() => setScanned('')}>
+                重新扫描
+              </button>
+              <button className="primary-button" onClick={() => onImport(scanned)}>
+                导入
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className="qr-dropzone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => void onDrop(event)}
+              onClick={() => fileInputRef.current?.click()}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => event.key === 'Enter' && fileInputRef.current?.click()}
+            >
+              <QrCode size={40} />
+              <strong>点击选择二维码图片，或把图片拖到这里</strong>
+              <span>
+                网站显示两步验证二维码时：右键二维码「复制图片」，然后在本窗口按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴即可识别。
+              </span>
+            </div>
+            <input
+              ref={fileInputRef}
+              className="icon-file-input"
+              type="file"
+              accept="image/*"
+              tabIndex={-1}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) void decodeFile(file);
+                event.currentTarget.value = '';
+              }}
+            />
+            {decoding && <p className="qr-message">识别中...</p>}
+            {message && <p className="qr-message">{message}</p>}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
