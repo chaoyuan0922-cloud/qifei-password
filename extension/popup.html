@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    :root { color-scheme: light; }
+    body {
+      width: 320px;
+      margin: 0;
+      padding: 14px;
+      background: #f7f8fa;
+      color: #282b31;
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 13px;
+    }
+    h1 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+    h1 img { width: 18px; height: 18px; }
+    .status { padding: 8px 10px; border-radius: 8px; background: #eceef2; color: #55585f; margin-bottom: 10px; }
+    .status.ok { background: #e6f6ea; color: #1c7c33; }
+    .status.warn { background: #fdf2e3; color: #92600a; }
+    .status.error { background: #fdeaea; color: #a03030; }
+    .item {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; box-sizing: border-box;
+      padding: 10px; margin-bottom: 6px;
+      background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
+      cursor: pointer; text-align: left; font: inherit; color: inherit;
+    }
+    .item:hover { border-color: #4c6ef5; }
+    .avatar {
+      flex: none; width: 30px; height: 30px; border-radius: 9px;
+      background: #4c6ef5; color: #fff; font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .text { min-width: 0; flex: 1; }
+    .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sub { color: #74777f; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .badge {
+      flex: none; padding: 2px 8px; border-radius: 999px;
+      background: #eef1ff; color: #4c6ef5; font-size: 11px; font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .token-box { display: flex; gap: 6px; margin-top: 8px; }
+    input[type="password"], input[type="text"] {
+      flex: 1; padding: 8px; border: 1px solid #d4d7de; border-radius: 8px; font-size: 12px;
+    }
+    button.primary {
+      padding: 8px 14px; border: 0; border-radius: 8px;
+      background: #4c6ef5; color: #fff; cursor: pointer; font-size: 12px;
+    }
+    button.primary:disabled { opacity: 0.6; cursor: default; }
+    .hint { color: #9a9da6; font-size: 11px; line-height: 1.6; margin-top: 10px; }
+    .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+    .link { background: none; border: 0; color: #4c6ef5; cursor: pointer; font-size: 12px; padding: 0; }
+    .totp-code { font-family: Consolas, monospace; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+  <h1><img src="icons/icon32.png" alt="" />起飞密码箱</h1>
+  <div id="status" class="status">正在连接...</div>
+  <div id="pairBox" class="token-box" style="display: none">
+    <input id="tokenInput" type="password" placeholder="粘贴应用设置中的桥接令牌" autocomplete="off" />
+    <button id="pairButton" class="primary">连接</button>
+  </div>
+  <div id="items"></div>
+  <div class="actions">
+    <button id="refreshButton" class="link">刷新</button>
+    <button id="forgetButton" class="link" style="color:#9a9da6">断开连接</button>
+  </div>
+  <div class="hint">
+    在登录页点击输入框即可自动填充；MFA 验证码会随凭据一起填入。首次使用需在应用「设置 → 浏览器扩展」中授权当前网站。
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

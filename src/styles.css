@@ -731,6 +731,142 @@ body.is-resizing-pane * {
   border-radius: 50%;
 }
 
+.totp-value {
+  font-family: var(--font-family-password);
+  font-feature-settings: var(--type-password-features);
+  letter-spacing: 0.12em;
+}
+
+.totp-countdown {
+  min-width: 24px;
+  color: #74777f;
+  font-size: var(--font-size-body-medium);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.totp-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: conic-gradient(#4c6ef5 var(--totp-progress, 100%), #e3e5ea 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+}
+
+.pairing-modal {
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  padding: 28px;
+  text-align: center;
+  border-radius: 16px;
+}
+
+.pairing-mark {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 12px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef1ff;
+  color: #4c6ef5;
+}
+
+.pairing-origin {
+  margin: 10px 0 4px;
+  word-break: break-all;
+}
+
+.pairing-note {
+  color: #74777f;
+  font-size: 12px;
+  margin: 0 0 16px;
+}
+
+.pairing-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.bridge-token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bridge-token {
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 12px;
+  border: 1px solid #e3e5ea;
+  border-radius: 8px;
+  background: #fafbfc;
+  font-family: var(--font-family-password);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  user-select: all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bridge-empty {
+  color: #74777f;
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+.bridge-origin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bridge-origin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #e3e5ea;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.bridge-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: #474a52;
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.bridge-steps code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #f0f1f5;
+  font-size: 12px;
+}
+
+.bridge-install-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.bridge-dir {
+  color: #9a9da6;
+  font-size: 12px;
+  word-break: break-all;
+}
+
 .detail-section {
   margin-top: 28px;
   color: #2b2e35;

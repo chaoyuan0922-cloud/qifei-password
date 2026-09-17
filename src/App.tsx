@@ -52,6 +52,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Puzzle,
   RefreshCw,
   Search,
   Server,
@@ -74,17 +75,21 @@ import type {
   ReactNode,
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { openPath } from '@tauri-apps/plugin-opener';
 import { api } from './api';
 import type {
   AppUpdateInfo,
+  BridgeInfo,
   EditableItemInput,
   ItemOverview,
   ItemType,
   LoginInput,
   PasswordInput,
   QuickAccessShortcut,
+  TotpCode,
   VaultProfile,
   VaultItem,
   VaultStatus,
@@ -96,6 +101,10 @@ type Overlay =
   | { kind: 'type-picker' }
   | { kind: 'editor'; itemType: ItemType }
   | { kind: 'settings' };
+type BridgePairingRequest = {
+  request_id: string;
+  origin: string;
+};
 type SidebarView = 'all' | 'favorites';
 type CategoryFilter = 'all' | ItemType;
 type ResizablePane = 'sidebar' | 'itemList';
@@ -116,7 +125,7 @@ type ShortcutKeyEvent = Pick<
   'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'preventDefault' | 'shiftKey' | 'stopPropagation'
 >;
 
-const APP_NAME = '船长密码箱';
+const APP_NAME = '起飞密码箱';
 const QUICK_WINDOW_LABEL = 'quick-search';
 const LOCAL_VAULT_NAME = '本地保险库';
 const LOCAL_VAULT_AVATAR = '本';
@@ -270,6 +279,7 @@ const fallbackLogin: LoginInput = {
   website: '',
   websites: [''],
   website_labels: ['网站'],
+  totp_secret: '',
   notes: '',
   tags: [],
 };
@@ -325,6 +335,8 @@ function MainApp() {
   const [resizingPane, setResizingPane] = useState<ResizablePane>();
   const [overlay, setOverlay] = useState<Overlay>({ kind: 'none' });
   const [error, setError] = useState('');
+  const [pairingRequest, setPairingRequest] = useState<BridgePairingRequest>();
+  const [pairingBusy, setPairingBusy] = useState(false);
 
   const shellStyle = useMemo(
     () =>
@@ -363,6 +375,30 @@ function MainApp() {
     }
     api.getItem(selectedId).then(setSelectedItem).catch((err) => setError(String(err)));
   }, [selectedId, status]);
+
+  useEffect(() => {
+    if (!isTauri()) return undefined;
+    let dispose: (() => void) | undefined;
+    void listen<BridgePairingRequest>('bridge-pairing-request', (event) => {
+      setPairingRequest(event.payload);
+    }).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, []);
+
+  const respondPairing = async (allow: boolean) => {
+    if (!pairingRequest) return;
+    setPairingBusy(true);
+    try {
+      await api.respondBridgePairing(pairingRequest.request_id, allow);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setPairingBusy(false);
+      setPairingRequest(undefined);
+    }
+  };
 
   const filteredItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -558,6 +594,29 @@ function MainApp() {
       )}
 
       {overlay.kind === 'settings' && <SettingsModal onClose={() => setOverlay({ kind: 'none' })} />}
+
+      {pairingRequest && (
+        <div className="overlay">
+          <div className="modal-card pairing-modal" role="alertdialog" aria-modal="true" aria-labelledby="pairing-title">
+            <div className="auth-mark pairing-mark">
+              <ShieldCheck size={30} />
+            </div>
+            <h2 id="pairing-title">允许浏览器扩展访问？</h2>
+            <p className="pairing-origin">
+              来自 <strong>{pairingRequest.origin}</strong> 的登录页请求读取匹配的凭据（含 MFA 验证码）。
+            </p>
+            <p className="pairing-note">仅在你信任该网站时允许。授权后可随时在「设置 → 浏览器扩展」中撤销。</p>
+            <div className="pairing-actions">
+              <button className="secondary-button" disabled={pairingBusy} onClick={() => void respondPairing(false)}>
+                拒绝
+              </button>
+              <button className="primary-button" disabled={pairingBusy} onClick={() => void respondPairing(true)}>
+                {pairingBusy ? '处理中...' : '永久允许'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -701,7 +760,7 @@ function AuthScreen({
               autoFocus
               type="text"
               value={profileName}
-              placeholder="例如：船长"
+              placeholder="例如：起飞"
               onChange={(event) => onProfileNameChange(event.target.value)}
               onKeyDown={(event) => event.key === 'Enter' && onSubmit()}
             />
@@ -1445,6 +1504,7 @@ function DetailPane({
                 onReveal={() => setRevealed((value) => !value)}
                 onCopy={() => copyValue(item.password)}
               />
+              {item.totp_secret.trim().length > 0 && <TotpFieldLine itemId={item.id} />}
             </div>
             {itemWebsites.map((website, index) => (
               <section className="detail-section" key={`${index}-${website}`}>
@@ -1504,6 +1564,7 @@ const loginInputFromItem = (item: VaultItem): LoginInput => {
     website: item.website,
     websites,
     website_labels: websites.map((_, index) => item.website_labels?.[index] ?? defaultWebsiteLabel),
+    totp_secret: item.totp_secret,
     notes: item.notes,
     tags: item.tags,
   };
@@ -1666,7 +1727,64 @@ function FieldLine({
   );
 }
 
+function TotpFieldLine({ itemId }: { itemId: string }) {
+  const [totp, setTotp] = useState<TotpCode>();
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const next = await api.getTotp(itemId);
+        if (!cancelled) setTotp(next ?? undefined);
+      } catch {
+        if (!cancelled) setTotp(undefined);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [itemId]);
+
+  if (!totp) return null;
+
+  const progress = Math.round((totp.remaining_seconds / totp.period_seconds) * 100);
+  const formattedCode = `${totp.code.slice(0, 3)} ${totp.code.slice(3)}`;
+
+  const copy = async () => {
+    await navigator.clipboard?.writeText(totp.code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+
+  return (
+    <div className="field-line highlighted totp-line">
+      <div>
+        <span className="field-label">MFA 验证码</span>
+        <span className="field-value totp-value">{formattedCode}</span>
+      </div>
+      <div className="field-actions">
+        <span className="totp-countdown" aria-label={`${totp.remaining_seconds} 秒后刷新`}>
+          {totp.remaining_seconds}s
+        </span>
+        <span
+          className="totp-ring"
+          style={{ '--totp-progress': `${progress}%` } as CSSProperties}
+          aria-hidden="true"
+        />
+        <button className="field-copy" onClick={() => void copy()}>
+          {copied ? '已复制' : '复制'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SettingsModal({ onClose }: { onClose: () => void }) {
+  const [activeSection, setActiveSection] = useState<'general' | 'browser'>('general');
   const [savedShortcut, setSavedShortcut] = useState<ShortcutConfig>(() => defaultQuickAccessShortcut());
   const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(() => defaultQuickAccessShortcut());
   const [recording, setRecording] = useState(false);
@@ -1839,12 +1957,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="设置栏目">
-            <button className="settings-nav-item selected">
+            <button
+              className={`settings-nav-item ${activeSection === 'general' ? 'selected' : ''}`}
+              onClick={() => setActiveSection('general')}
+            >
               <Settings size={18} />
               <span>通用</span>
             </button>
+            <button
+              className={`settings-nav-item ${activeSection === 'browser' ? 'selected' : ''}`}
+              onClick={() => setActiveSection('browser')}
+            >
+              <Puzzle size={18} />
+              <span>浏览器扩展</span>
+            </button>
           </nav>
 
+          {activeSection === 'general' ? (
           <section className="settings-panel" aria-label="通用设置">
             <section className="settings-panel-section" aria-labelledby="shortcut-settings-title">
               <div className="settings-panel-heading">
@@ -1922,9 +2051,154 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               </div>
             </section>
           </section>
+          ) : (
+            <BrowserBridgeSettings />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function BrowserBridgeSettings() {
+  const [bridgeInfo, setBridgeInfo] = useState<BridgeInfo>();
+  const [origins, setOrigins] = useState<string[]>([]);
+  const [extensionDir, setExtensionDir] = useState('');
+  const [message, setMessage] = useState('');
+  const [copiedToken, setCopiedToken] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getBridgeInfo()
+      .then((info) => {
+        if (!cancelled) setBridgeInfo(info);
+      })
+      .catch((err) => {
+        if (!cancelled) setMessage(String(err));
+      });
+    api
+      .listBridgeOrigins()
+      .then((next) => {
+        if (!cancelled) setOrigins(next);
+      })
+      .catch(() => {});
+    api
+      .getExtensionDir()
+      .then((dir) => {
+        if (!cancelled) setExtensionDir(dir);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const copyToken = async () => {
+    if (!bridgeInfo) return;
+    await navigator.clipboard?.writeText(bridgeInfo.token);
+    setCopiedToken(true);
+    window.setTimeout(() => setCopiedToken(false), 1200);
+  };
+
+  const regenerate = async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      setBridgeInfo(await api.regenerateBridgeToken());
+      setMessage('已生成新令牌，旧令牌立即失效，请在扩展弹窗中重新粘贴。');
+    } catch (err) {
+      setMessage(`操作失败：${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (origin: string) => {
+    setMessage('');
+    try {
+      setOrigins(await api.revokeBridgeOrigin(origin));
+    } catch (err) {
+      setMessage(`操作失败：${String(err)}`);
+    }
+  };
+
+  const openExtensionFolder = async () => {
+    if (!extensionDir) return;
+    setMessage('');
+    try {
+      await openPath(extensionDir);
+    } catch (err) {
+      setMessage(`打开失败：${String(err)}`);
+    }
+  };
+
+  return (
+    <section className="settings-panel" aria-label="浏览器扩展设置">
+      <section className="settings-panel-section" aria-labelledby="bridge-token-title">
+        <div className="settings-panel-heading">
+          <h3 id="bridge-token-title">桌面桥接</h3>
+          <p>
+            {bridgeInfo
+              ? `已启动，监听 127.0.0.1:${bridgeInfo.port}。扩展用下面的令牌与本机应用配对。`
+              : '桥接服务启动中…'}
+          </p>
+        </div>
+        <div className="bridge-token-row">
+          <code className="bridge-token" title="桥接令牌">
+            {bridgeInfo?.token || '————'}
+          </code>
+          <button className="secondary-button" disabled={!bridgeInfo} onClick={() => void copyToken()}>
+            {copiedToken ? '已复制' : '复制令牌'}
+          </button>
+          <button className="plain-button" disabled={!bridgeInfo || busy} onClick={() => void regenerate()}>
+            重新生成
+          </button>
+        </div>
+        {message && <span className="shortcut-message">{message}</span>}
+      </section>
+
+      <section className="settings-panel-section" aria-labelledby="bridge-origins-title">
+        <div className="settings-panel-heading">
+          <h3 id="bridge-origins-title">已授权网站</h3>
+          <p>这些网站可以请求自动填充保存的登录信息和 MFA 验证码。</p>
+        </div>
+        {origins.length === 0 ? (
+          <p className="bridge-empty">还没有授权任何网站。首次在浏览器中填充时会弹出授权确认。</p>
+        ) : (
+          <div className="bridge-origin-list">
+            {origins.map((origin) => (
+              <div className="bridge-origin-row" key={origin}>
+                <span>{origin}</span>
+                <button className="plain-button" onClick={() => void revoke(origin)}>
+                  撤销
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="settings-panel-section" aria-labelledby="bridge-install-title">
+        <div className="settings-panel-heading">
+          <h3 id="bridge-install-title">安装浏览器扩展</h3>
+          <p>适用于 Chrome、Edge 等 Chromium 内核浏览器。</p>
+        </div>
+        <ol className="bridge-steps">
+          <li>点击下方按钮，打开本机扩展文件夹。</li>
+          <li>浏览器地址栏打开 <code>chrome://extensions</code>（Edge 为 <code>edge://extensions</code>）。</li>
+          <li>打开「开发者模式」，点击「加载已解压的扩展程序」，选择扩展文件夹。</li>
+          <li>点击工具栏中的起飞密码箱扩展图标，粘贴上方令牌完成连接。</li>
+        </ol>
+        <div className="bridge-install-actions">
+          <button className="secondary-button" disabled={!extensionDir} onClick={() => void openExtensionFolder()}>
+            打开扩展文件夹
+          </button>
+          {extensionDir && <span className="bridge-dir">{extensionDir}</span>}
+        </div>
+      </section>
+    </section>
   );
 }
 
@@ -2147,6 +2421,7 @@ function EditableTextField({
   tone = 'primary',
   actions,
   inputClassName,
+  placeholder,
   onLabelChange,
   onChange,
 }: {
@@ -2157,6 +2432,7 @@ function EditableTextField({
   tone?: FieldTone;
   actions?: ReactNode;
   inputClassName?: string;
+  placeholder?: string;
   onLabelChange?: (value: string) => void;
   onChange: (value: string) => void;
 }) {
@@ -2184,6 +2460,7 @@ function EditableTextField({
             id={fieldId}
             className={`editable-field-value ${inputClassName ?? ''}`}
             value={value}
+            placeholder={placeholder}
             aria-label={onLabelChange ? `${currentLabel || label}值` : undefined}
             onChange={(event) => onChange(event.target.value)}
           />
@@ -2226,6 +2503,16 @@ function LoginEditorFields({
           onGeneratorHintChange={onGeneratorHintChange}
           onGeneratorOpenChange={onGeneratorOpenChange}
           onChange={(password) => onChange({ password })}
+        />
+      </EditableFieldGroup>
+      <EditableFieldGroup>
+        <EditableTextField
+          label="MFA 密钥（TOTP）"
+          value={input.totp_secret}
+          borderStyle="single"
+          tone="secondary"
+          placeholder="粘贴 otpauth:// 链接或 Base32 密钥（可选）"
+          onChange={(totp_secret) => onChange({ totp_secret })}
         />
       </EditableFieldGroup>
       <WebsiteFields input={input} onChange={onChange} />

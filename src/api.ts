@@ -3,6 +3,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import packageJson from '../package.json';
 import type {
   AppUpdateInfo,
+  BridgeInfo,
   EditableItemInput,
   GeneratedPasswordOptions,
   ItemOverview,
@@ -11,6 +12,7 @@ import type {
   PasswordInput,
   PasswordItem,
   QuickAccessShortcut,
+  TotpCode,
   VaultProfile,
   VaultItem,
   VaultStatus,
@@ -31,10 +33,17 @@ type Api = {
   createPassword(input: PasswordInput): Promise<PasswordItem>;
   updateItem(id: string, input: EditableItemInput): Promise<VaultItem>;
   setFavorite(id: string, favorite: boolean): Promise<VaultItem>;
+  getTotp(id: string): Promise<TotpCode | null>;
   generatePassword(options: GeneratedPasswordOptions): Promise<string>;
   copyText(value: string): Promise<void>;
   getQuickAccessShortcut(): Promise<QuickAccessShortcut>;
   setQuickAccessShortcut(shortcut: QuickAccessShortcut): Promise<QuickAccessShortcut>;
+  getBridgeInfo(): Promise<BridgeInfo>;
+  regenerateBridgeToken(): Promise<BridgeInfo>;
+  listBridgeOrigins(): Promise<string[]>;
+  revokeBridgeOrigin(origin: string): Promise<string[]>;
+  respondBridgePairing(requestId: string, allow: boolean): Promise<void>;
+  getExtensionDir(): Promise<string>;
 };
 
 const demoItems: VaultItem[] = [];
@@ -151,6 +160,63 @@ const toOverview = (item: VaultItem): ItemOverview => ({
 const primaryWebsite = (websites: string[], fallback: string) =>
   websites.find((website) => website.trim().length > 0) ?? websites[0] ?? fallback;
 
+const totpPeriodSeconds = 30;
+
+const normalizeTotpSecret = (raw: string): string => {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.toLowerCase().startsWith('otpauth://')) {
+    const rest = trimmed.slice('otpauth://'.length).replace(/^totp\//i, '');
+    const query = rest.split('?')[1] ?? '';
+    for (const pair of query.split('&')) {
+      const [key, value] = pair.split('=');
+      if (key === 'secret' && value.trim()) return value.trim().toUpperCase();
+    }
+    return '';
+  }
+  return trimmed.toUpperCase().replace(/[\s-]/g, '');
+};
+
+const base32Decode = (secret: string): Uint8Array => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const normalized = secret.toUpperCase().replace(/[\s-]/g, '');
+  let bits = 0;
+  let bitCount = 0;
+  const output: number[] = [];
+  for (const ch of normalized) {
+    const value = alphabet.indexOf(ch);
+    if (value === -1) throw new Error('invalid base32');
+    bits = (bits << 5) | value;
+    bitCount += 5;
+    if (bitCount >= 8) {
+      bitCount -= 8;
+      output.push((bits >>> bitCount) & 0xff);
+    }
+  }
+  return new Uint8Array(output);
+};
+
+const computeTotpLocally = async (rawSecret: string): Promise<TotpCode> => {
+  const secret = normalizeTotpSecret(rawSecret);
+  if (!secret) throw new Error('empty secret');
+  const counter = Math.floor(Date.now() / 1000 / totpPeriodSeconds);
+  const counterBuffer = new ArrayBuffer(8);
+  new DataView(counterBuffer).setUint32(4, counter);
+  const key = await crypto.subtle.importKey('raw', base32Decode(secret) as BufferSource, {
+    name: 'HMAC',
+    hash: 'SHA-1',
+  }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, counterBuffer));
+  const offset = mac[mac.length - 1] & 0x0f;
+  const binary =
+    ((mac[offset] & 0x7f) << 24) | (mac[offset + 1] << 16) | (mac[offset + 2] << 8) | mac[offset + 3];
+  return {
+    code: String(binary % 1_000_000).padStart(6, '0'),
+    remaining_seconds: totpPeriodSeconds - (Math.floor(Date.now() / 1000) % totpPeriodSeconds),
+    period_seconds: totpPeriodSeconds,
+  };
+};
+
 const randomPassword = (options: GeneratedPasswordOptions) => {
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   const numbers = '23456789';
@@ -223,6 +289,7 @@ const browserPreviewApi: Api = {
       website: input.website,
       websites: input.websites,
       website_labels: input.website_labels,
+      totp_secret: normalizeTotpSecret(input.totp_secret),
       notes: input.notes,
       tags: input.tags,
       favorite: false,
@@ -266,6 +333,7 @@ const browserPreviewApi: Api = {
             website: primaryWebsite(update.input.websites, update.input.website),
             websites: update.input.websites,
             website_labels: update.input.website_labels,
+            totp_secret: normalizeTotpSecret(update.input.totp_secret),
             notes: update.input.notes,
             tags: update.input.tags,
             favorite: current.favorite,
@@ -291,6 +359,15 @@ const browserPreviewApi: Api = {
     if (!item) throw new Error('Item not found');
     item.favorite = favorite;
     return item;
+  },
+  async getTotp(id: string) {
+    const item = demoItems.find((entry) => entry.id === id);
+    if (item?.item_type !== 'login' || !item.totp_secret.trim()) return null;
+    try {
+      return await computeTotpLocally(item.totp_secret);
+    } catch {
+      return null;
+    }
   },
   async generatePassword(options: GeneratedPasswordOptions) {
     return randomPassword(options);
@@ -323,6 +400,22 @@ const browserPreviewApi: Api = {
     localStorage.setItem(quickAccessShortcutStorageKey, JSON.stringify(shortcut));
     return shortcut;
   },
+  async getBridgeInfo() {
+    return { port: 0, token: '' };
+  },
+  async regenerateBridgeToken() {
+    return { port: 0, token: '' };
+  },
+  async listBridgeOrigins() {
+    return [];
+  },
+  async revokeBridgeOrigin() {
+    return [];
+  },
+  async respondBridgePairing() {},
+  async getExtensionDir() {
+    return '';
+  },
 };
 
 const tauriApi: Api = {
@@ -340,10 +433,17 @@ const tauriApi: Api = {
   createPassword: (input) => invoke<PasswordItem>('create_password', { input }),
   updateItem: (id, input) => invoke<VaultItem>('update_item', { id, input }),
   setFavorite: (id, favorite) => invoke<VaultItem>('set_item_favorite', { id, favorite }),
+  getTotp: (id) => invoke<TotpCode | null>('get_totp', { id }),
   generatePassword: (options) => invoke<string>('generate_password', { options }),
   copyText: (value) => invoke<void>('copy_text', { value }),
   getQuickAccessShortcut: () => invoke<QuickAccessShortcut>('get_quick_access_shortcut'),
   setQuickAccessShortcut: (shortcut) => invoke<QuickAccessShortcut>('set_quick_access_shortcut', { shortcut }),
+  getBridgeInfo: () => invoke<BridgeInfo>('get_bridge_info'),
+  regenerateBridgeToken: () => invoke<BridgeInfo>('regenerate_bridge_token'),
+  listBridgeOrigins: () => invoke<string[]>('list_bridge_origins'),
+  revokeBridgeOrigin: (origin) => invoke<string[]>('revoke_bridge_origin', { origin }),
+  respondBridgePairing: (requestId, allow) => invoke<void>('respond_bridge_pairing', { requestId, allow }),
+  getExtensionDir: () => invoke<string>('get_extension_dir'),
 };
 
 export const api: Api = isTauriRuntime() ? tauriApi : browserPreviewApi;

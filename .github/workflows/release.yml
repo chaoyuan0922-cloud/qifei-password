@@ -37,13 +37,13 @@ jobs:
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "船长密码箱 ${RELEASE_TAG}" \
+              --title "起飞密码箱 ${RELEASE_TAG}" \
               --notes "${body}" \
               --latest
           else
             gh release create "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "船长密码箱 ${RELEASE_TAG}" \
+              --title "起飞密码箱 ${RELEASE_TAG}" \
               --notes "${body}" \
               --latest
           fi
@@ -121,7 +121,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: 船长密码箱 ${{ env.RELEASE_TAG }}
+          releaseName: 起飞密码箱 ${{ env.RELEASE_TAG }}
           releaseBody: |
             CaptainPassword desktop builds for Windows x64, macOS Apple Silicon, and macOS Intel.
 

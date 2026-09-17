@@ -1,5 +1,7 @@
 use std::{fs, path::PathBuf, sync::Mutex};
 
+use std::{collections::HashMap, io::Read, sync::mpsc, time::Duration};
+
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chacha20poly1305::{
@@ -8,10 +10,12 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use rand::{seq::SliceRandom, Rng};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use sha1::Sha1;
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -80,6 +84,8 @@ struct LoginDetails {
     websites: Vec<String>,
     #[serde(default)]
     website_labels: Vec<String>,
+    #[serde(default)]
+    totp_secret: String,
     notes: String,
     tags: Vec<String>,
     #[serde(default)]
@@ -118,6 +124,8 @@ struct LoginInput {
     websites: Vec<String>,
     #[serde(default)]
     website_labels: Vec<String>,
+    #[serde(default)]
+    totp_secret: String,
     notes: String,
     tags: Vec<String>,
 }
@@ -358,6 +366,98 @@ fn decrypt_json<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, String> {
     let plaintext = decrypt_bytes(key, aad, encrypted)?;
     serde_json::from_slice(&plaintext).map_err(|err| err.to_string())
+}
+
+const TOTP_PERIOD_SECONDS: u64 = 30;
+
+fn decode_base32(secret: &str) -> Result<Vec<u8>, String> {
+    let mut bits: u32 = 0;
+    let mut bit_count: u32 = 0;
+    let mut output = Vec::with_capacity(secret.len() * 5 / 8);
+    for ch in secret.chars() {
+        if ch.is_whitespace() || ch == '-' || ch == '=' {
+            continue;
+        }
+        let value = match ch {
+            'A'..='Z' => ch as u32 - 'A' as u32,
+            'a'..='z' => ch as u32 - 'a' as u32,
+            '2'..='7' => ch as u32 - '2' as u32 + 26,
+            _ => return Err("MFA 密钥包含无效的 Base32 字符。".to_string()),
+        };
+        bits = (bits << 5) | value;
+        bit_count += 5;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            output.push(((bits >> bit_count) & 0xff) as u8);
+        }
+    }
+    if output.is_empty() {
+        return Err("MFA 密钥不能为空。".to_string());
+    }
+    Ok(output)
+}
+
+fn normalize_base32_secret(raw: &str) -> String {
+    raw.chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '-')
+        .flat_map(|ch| ch.to_uppercase())
+        .collect()
+}
+
+/// Accepts either a raw Base32 secret or an `otpauth://totp/...` URI and
+/// returns the normalized Base32 secret.
+fn normalize_totp_secret(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if let Some(rest) = trimmed
+        .strip_prefix("otpauth://")
+        .map(|rest| rest.strip_prefix("totp/").unwrap_or(rest))
+    {
+        let query = rest.splitn(2, '?').nth(1).unwrap_or("");
+        for pair in query.split('&') {
+            let mut parts = pair.splitn(2, '=');
+            if parts.next() == Some("secret") {
+                let secret = parts.next().unwrap_or("").trim();
+                if secret.is_empty() {
+                    break;
+                }
+                decode_base32(secret)?;
+                return Ok(normalize_base32_secret(secret));
+            }
+        }
+        return Err("otpauth 链接中未找到 secret 参数。".to_string());
+    }
+    let normalized = normalize_base32_secret(trimmed);
+    decode_base32(&normalized)?;
+    Ok(normalized)
+}
+
+fn hotp_sha1(key: &[u8], counter: u64) -> String {
+    let mut mac = <Hmac<Sha1> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(&counter.to_be_bytes());
+    let digest = mac.finalize().into_bytes();
+    let offset = (digest[digest.len() - 1] & 0x0f) as usize;
+    let binary = ((digest[offset] as u32 & 0x7f) << 24)
+        | ((digest[offset + 1] as u32) << 16)
+        | ((digest[offset + 2] as u32) << 8)
+        | (digest[offset + 3] as u32);
+    format!("{:06}", binary % 1_000_000)
+}
+
+fn totp_code_at(secret: &str, unix_seconds: u64) -> Result<(String, u64), String> {
+    let key = decode_base32(secret)?;
+    let code = hotp_sha1(&key, unix_seconds / TOTP_PERIOD_SECONDS);
+    let remaining = TOTP_PERIOD_SECONDS - (unix_seconds % TOTP_PERIOD_SECONDS);
+    Ok((code, remaining))
+}
+
+fn unix_now_seconds() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| err.to_string())
 }
 
 fn current_root_key(state: &tauri::State<AppState>) -> Result<[u8; 32], String> {
@@ -640,6 +740,7 @@ fn create_login(input: LoginInput, state: tauri::State<AppState>) -> Result<Logi
     let websites = normalize_websites(input.website, input.websites);
     let website_labels = normalize_website_labels(input.website_labels, websites.len());
     let website = primary_website(&websites);
+    let totp_secret = normalize_totp_secret(&input.totp_secret)?;
     let details = LoginDetails {
         id: id.clone(),
         item_type: "login".to_string(),
@@ -649,6 +750,7 @@ fn create_login(input: LoginInput, state: tauri::State<AppState>) -> Result<Logi
         website,
         websites,
         website_labels,
+        totp_secret,
         notes: input.notes,
         tags: input.tags,
         favorite: false,
@@ -757,6 +859,7 @@ fn update_item(
             let websites = normalize_websites(input.website, input.websites);
             let website_labels = normalize_website_labels(input.website_labels, websites.len());
             let website = primary_website(&websites);
+            let totp_secret = normalize_totp_secret(&input.totp_secret)?;
             let details = LoginDetails {
                 id: id.clone(),
                 item_type: "login".to_string(),
@@ -766,6 +869,7 @@ fn update_item(
                 website,
                 websites,
                 website_labels,
+                totp_secret,
                 notes: input.notes,
                 tags: input.tags,
                 favorite: favorite_bool,
@@ -911,6 +1015,40 @@ fn copy_text(value: String) -> Result<(), String> {
     clipboard.set_text(value).map_err(|err| err.to_string())
 }
 
+#[derive(Serialize)]
+struct TotpCode {
+    code: String,
+    remaining_seconds: u64,
+    period_seconds: u64,
+}
+
+#[tauri::command]
+fn get_totp(id: String, state: tauri::State<AppState>) -> Result<Option<TotpCode>, String> {
+    let root_key = current_root_key(&state)?;
+    let conn = open_db()?;
+    let (item_type, encrypted_details): (String, Vec<u8>) = conn
+        .query_row(
+            "SELECT item_type, encrypted_details FROM items WHERE id = ?1 AND deleted_at IS NULL",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| "Item not found".to_string())?;
+    if item_type != "login" {
+        return Ok(None);
+    }
+    let aad = format!("item-details:{id}");
+    let details: LoginDetails = decrypt_json(&root_key, aad.as_bytes(), &encrypted_details)?;
+    if details.totp_secret.trim().is_empty() {
+        return Ok(None);
+    }
+    let (code, remaining_seconds) = totp_code_at(&details.totp_secret, unix_now_seconds()?)?;
+    Ok(Some(TotpCode {
+        code,
+        remaining_seconds,
+        period_seconds: TOTP_PERIOD_SECONDS,
+    }))
+}
+
 #[tauri::command]
 fn get_quick_access_shortcut() -> ShortcutPreference {
     read_quick_access_shortcut()
@@ -930,6 +1068,566 @@ fn set_quick_access_shortcut<R: tauri::Runtime>(
     Ok(shortcut)
 }
 
+// ===== Browser extension bridge =====
+
+const BRIDGE_HOST: &str = "127.0.0.1";
+const BRIDGE_PORT_CANDIDATES: [u16; 8] = [27124, 27125, 27126, 27127, 27128, 27129, 27130, 27131];
+const BRIDGE_MAX_BODY_BYTES: u64 = 64 * 1024;
+const BRIDGE_PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
+const BRIDGE_ALLOWED_ORIGINS_KEY: &str = "bridge_allowed_origins";
+const BRIDGE_PAIRING_EVENT: &str = "bridge-pairing-request";
+
+#[derive(Serialize, Deserialize, Clone)]
+struct BridgeInfo {
+    port: u16,
+    token: String,
+}
+
+#[derive(Default)]
+struct BridgeShared {
+    info: Mutex<Option<BridgeInfo>>,
+    token: Mutex<String>,
+}
+
+struct PairingEntry {
+    request_id: String,
+    senders: Vec<mpsc::SyncSender<bool>>,
+}
+
+#[derive(Default)]
+struct BridgePairing {
+    pending: Mutex<HashMap<String, PairingEntry>>,
+}
+
+fn bridge_file_path() -> Result<PathBuf, String> {
+    Ok(data_dir()?.join("bridge.json"))
+}
+
+fn random_bridge_token() -> String {
+    let bytes: [u8; 16] = random_bytes();
+    BASE64.encode(bytes)
+}
+
+fn persist_bridge_info(info: &BridgeInfo) -> Result<(), String> {
+    let dir = data_dir()?;
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let content = serde_json::to_string_pretty(info).map_err(|err| err.to_string())?;
+    fs::write(bridge_file_path()?, content).map_err(|err| err.to_string())
+}
+
+fn read_allowed_bridge_origins(conn: &Connection) -> Result<Vec<String>, String> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![BRIDGE_ALLOWED_ORIGINS_KEY],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+    let origins = raw
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default();
+    Ok(origins)
+}
+
+fn add_allowed_bridge_origin(conn: &Connection, host: &str) -> Result<(), String> {
+    let mut origins = read_allowed_bridge_origins(conn)?;
+    if !origins.iter().any(|origin| origin == host) {
+        origins.push(host.to_string());
+        let value = serde_json::to_string(&origins).map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            params![BRIDGE_ALLOWED_ORIGINS_KEY, value],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+/// Extracts a lowercase hostname from a URL, an `host:port` pair or a bare host.
+fn normalize_bridge_host(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_scheme = trimmed.split("://").nth(1).unwrap_or(&trimmed);
+    let authority = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+fn strip_www_suffix(host: &str) -> &str {
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// Matches two hosts, allowing subdomain matches so a site entry of
+/// `example.com` also fills on `login.example.com`.
+fn bridge_hosts_match(entry: &str, page: &str) -> bool {
+    let entry = strip_www_suffix(entry);
+    let page = strip_www_suffix(page);
+    entry == page || page.ends_with(&format!(".{entry}")) || entry.ends_with(&format!(".{page}"))
+}
+
+#[derive(Serialize)]
+struct BridgeLoginItem {
+    id: String,
+    title: String,
+    username: String,
+    password: String,
+    totp_code: Option<String>,
+    totp_remaining_seconds: Option<u64>,
+}
+
+fn collect_bridge_logins(
+    root_key: &[u8; 32],
+    page_host: &str,
+) -> Result<Vec<BridgeLoginItem>, String> {
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, encrypted_details FROM items WHERE item_type = 'login' AND deleted_at IS NULL",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(|err| err.to_string())?;
+
+    let now = unix_now_seconds()?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (id, encrypted_details) = row.map_err(|err| err.to_string())?;
+        let aad = format!("item-details:{id}");
+        let Ok(details) = decrypt_json::<LoginDetails>(root_key, aad.as_bytes(), &encrypted_details)
+        else {
+            continue;
+        };
+        let matches = details
+            .websites
+            .iter()
+            .filter_map(|website| normalize_bridge_host(website))
+            .any(|host| bridge_hosts_match(&host, page_host));
+        if !matches {
+            continue;
+        }
+        let totp = if details.totp_secret.trim().is_empty() {
+            None
+        } else {
+            totp_code_at(&details.totp_secret, now).ok()
+        };
+        items.push(BridgeLoginItem {
+            id,
+            title: details.title,
+            username: details.username,
+            password: details.password,
+            totp_code: totp.as_ref().map(|entry| entry.0.clone()),
+            totp_remaining_seconds: totp.map(|entry| entry.1),
+        });
+    }
+    Ok(items)
+}
+
+fn bridge_json_response(request: tiny_http::Request, status_code: u16, body: &serde_json::Value) {
+    let payload = serde_json::to_vec(body).unwrap_or_else(|_| b"{}".to_vec());
+    let response = tiny_http::Response::from_data(payload)
+        .with_status_code(status_code)
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+        );
+    let _ = request.respond(response);
+}
+
+fn bridge_method_not_allowed(request: tiny_http::Request) {
+    bridge_json_response(
+        request,
+        405,
+        &serde_json::json!({ "status": "method_not_allowed" }),
+    );
+}
+
+fn bridge_unauthorized(request: tiny_http::Request) {
+    bridge_json_response(request, 401, &serde_json::json!({ "status": "unauthorized" }));
+}
+
+fn bridge_wait_for_pairing<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    page_host: &str,
+) -> Result<bool, String> {
+    let pairing = app.state::<BridgePairing>();
+    let (sender, receiver) = mpsc::sync_channel::<bool>(1);
+    let request_id = Uuid::new_v4().to_string();
+    let mut announce = false;
+
+    {
+        let mut pending = pairing
+            .pending
+            .lock()
+            .map_err(|_| "Pairing lock poisoned".to_string())?;
+        let entry = pending
+            .entry(page_host.to_string())
+            .or_insert_with(|| {
+                announce = true;
+                PairingEntry {
+                    request_id: request_id.clone(),
+                    senders: Vec::new(),
+                }
+            });
+        entry.senders.push(sender);
+    }
+
+    if announce {
+        app.emit(
+            BRIDGE_PAIRING_EVENT,
+            serde_json::json!({ "request_id": request_id, "origin": page_host }),
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    let decision = receiver
+        .recv_timeout(BRIDGE_PAIRING_TIMEOUT)
+        .unwrap_or(false);
+    Ok(decision)
+}
+
+fn handle_bridge_logins<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    request: tiny_http::Request,
+    body: &[u8],
+) {
+    #[derive(Deserialize)]
+    struct LoginsInput {
+        origin: String,
+    }
+
+    let input: LoginsInput = match serde_json::from_slice(body) {
+        Ok(input) => input,
+        Err(_) => {
+            bridge_json_response(request, 400, &serde_json::json!({ "status": "bad_request" }));
+            return;
+        }
+    };
+    let Some(page_host) = normalize_bridge_host(&input.origin) else {
+        bridge_json_response(request, 400, &serde_json::json!({ "status": "bad_request" }));
+        return;
+    };
+
+    let state = app.state::<AppState>();
+    let root_key = match current_root_key(&state) {
+        Ok(root_key) => root_key,
+        Err(_) => {
+            bridge_json_response(request, 200, &serde_json::json!({ "status": "locked", "items": [] }));
+            return;
+        }
+    };
+
+    let conn = match open_db() {
+        Ok(conn) => conn,
+        Err(err) => {
+            bridge_json_response(request, 500, &serde_json::json!({ "status": "error", "message": err }));
+            return;
+        }
+    };
+    let allowed = match read_allowed_bridge_origins(&conn) {
+        Ok(allowed) => allowed,
+        Err(err) => {
+            bridge_json_response(request, 500, &serde_json::json!({ "status": "error", "message": err }));
+            return;
+        }
+    };
+
+    if !allowed
+        .iter()
+        .any(|entry| bridge_hosts_match(entry, &page_host))
+    {
+        let decision = bridge_wait_for_pairing(app, &page_host).unwrap_or(false);
+        if !decision {
+            bridge_json_response(request, 200, &serde_json::json!({ "status": "denied" }));
+            return;
+        }
+        if let Err(err) = add_allowed_bridge_origin(&conn, &page_host) {
+            bridge_json_response(request, 500, &serde_json::json!({ "status": "error", "message": err }));
+            return;
+        }
+    }
+
+    match collect_bridge_logins(&root_key, &page_host) {
+        Ok(items) => bridge_json_response(
+            request,
+            200,
+            &serde_json::json!({ "status": "ok", "items": items }),
+        ),
+        Err(err) => bridge_json_response(request, 500, &serde_json::json!({ "status": "error", "message": err })),
+    }
+}
+
+fn handle_bridge_request<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    shared: &BridgeShared,
+    mut request: tiny_http::Request,
+) {
+    if *request.method() == tiny_http::Method::Options {
+        let response = tiny_http::Response::empty(204)
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+            )
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..])
+                    .unwrap(),
+            )
+            .with_header(
+                tiny_http::Header::from_bytes(
+                    &b"Access-Control-Allow-Headers"[..],
+                    &b"Authorization, Content-Type"[..],
+                )
+                .unwrap(),
+            )
+            .with_header(
+                tiny_http::Header::from_bytes(&b"Access-Control-Max-Age"[..], &b"86400"[..]).unwrap(),
+            );
+        let _ = request.respond(response);
+        return;
+    }
+
+    let expected_token = shared
+        .token
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    let authorized = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Authorization"))
+        .and_then(|header| header.value.as_str().strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected_token);
+    if !authorized || expected_token.is_empty() {
+        bridge_unauthorized(request);
+        return;
+    }
+
+    let path = request.url().split('?').next().unwrap_or("").to_string();
+    match (request.method().as_str(), path.as_str()) {
+        ("GET", "/status") => {
+            let status = {
+                let state = app.state::<AppState>();
+                let guard = state.session.lock().ok();
+                match guard {
+                    Some(guard) if guard.is_some() => "unlocked",
+                    _ => {
+                        if db_path().map(|path| path.exists()).unwrap_or(false) {
+                            "locked"
+                        } else {
+                            "no_vault"
+                        }
+                    }
+                }
+            };
+            bridge_json_response(
+                request,
+                200,
+                &serde_json::json!({ "status": status, "version": env!("CARGO_PKG_VERSION") }),
+            );
+        }
+        ("POST", "/logins") => {
+            let mut body = Vec::new();
+            if request
+                .as_reader()
+                .take(BRIDGE_MAX_BODY_BYTES)
+                .read_to_end(&mut body)
+                .is_err()
+            {
+                bridge_json_response(request, 400, &serde_json::json!({ "status": "bad_request" }));
+                return;
+            }
+            handle_bridge_logins(app, request, &body);
+        }
+        _ => bridge_method_not_allowed(request),
+    }
+}
+
+fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    let result = (|| -> Result<(), String> {
+        let mut bound = None;
+        for port in BRIDGE_PORT_CANDIDATES {
+            if let Ok(server) = tiny_http::Server::http((BRIDGE_HOST, port)) {
+                bound = Some((server, port));
+                break;
+            }
+        }
+        let (server, port) =
+            bound.ok_or_else(|| "No free bridge port available".to_string())?;
+        let token = random_bridge_token();
+        let info = BridgeInfo { port, token: token.clone() };
+        persist_bridge_info(&info)?;
+
+        let shared = std::sync::Arc::new(BridgeShared {
+            info: Mutex::new(Some(info)),
+            token: Mutex::new(token),
+        });
+        if let Some(existing) = app.try_state::<BridgeShared>() {
+            if let Ok(mut guard) = existing.info.lock() {
+                *guard = shared.info.lock().ok().and_then(|guard| guard.clone());
+            }
+            if let (Ok(mut guard), Ok(new_guard)) = (existing.token.lock(), shared.token.lock()) {
+                *guard = new_guard.clone();
+            }
+        } else {
+            app.manage(shared.clone());
+        }
+        app.manage(BridgePairing::default());
+
+        let server = std::sync::Arc::new(server);
+        for worker in 0..3 {
+            let server = server.clone();
+            let shared = shared.clone();
+            let app = app.clone();
+            std::thread::spawn(move || loop {
+                match server.recv() {
+                    Ok(request) => handle_bridge_request(&app, &shared, request),
+                    Err(err) => {
+                        eprintln!("Bridge worker {worker} stopped: {err}");
+                        break;
+                    }
+                }
+            });
+        }
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        eprintln!("Failed to start browser bridge: {err}");
+    }
+}
+
+#[tauri::command]
+fn get_bridge_info(state: tauri::State<BridgeShared>) -> Result<BridgeInfo, String> {
+    let info = state
+        .info
+        .lock()
+        .map_err(|_| "Bridge lock poisoned".to_string())?
+        .clone();
+    info.ok_or_else(|| "浏览器桥接未启动".to_string())
+}
+
+#[tauri::command]
+fn regenerate_bridge_token<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<BridgeShared>,
+) -> Result<BridgeInfo, String> {
+    let token = random_bridge_token();
+    let info = {
+        let port = state
+            .info
+            .lock()
+            .map_err(|_| "Bridge lock poisoned".to_string())?
+            .as_ref()
+            .map(|info| info.port)
+            .ok_or_else(|| "浏览器桥接未启动".to_string())?;
+        let mut token_guard = state
+            .token
+            .lock()
+            .map_err(|_| "Bridge lock poisoned".to_string())?;
+        *token_guard = token.clone();
+        BridgeInfo { port, token }
+    };
+    persist_bridge_info(&info)?;
+    let _ = app;
+    Ok(info)
+}
+
+#[tauri::command]
+fn list_bridge_origins() -> Result<Vec<String>, String> {
+    let conn = open_db()?;
+    read_allowed_bridge_origins(&conn)
+}
+
+#[tauri::command]
+fn revoke_bridge_origin(origin: String) -> Result<Vec<String>, String> {
+    let conn = open_db()?;
+    let remaining: Vec<String> = read_allowed_bridge_origins(&conn)?
+        .into_iter()
+        .filter(|entry| entry != &origin)
+        .collect();
+    let value = serde_json::to_string(&remaining).map_err(|err| err.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+        params![BRIDGE_ALLOWED_ORIGINS_KEY, value],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(remaining)
+}
+
+#[tauri::command]
+fn respond_bridge_pairing(
+    request_id: String,
+    allow: bool,
+    pairing: tauri::State<BridgePairing>,
+) -> Result<(), String> {
+    let mut pending = pairing
+        .pending
+        .lock()
+        .map_err(|_| "Pairing lock poisoned".to_string())?;
+    let mut found = false;
+    pending.retain(|_, entry| {
+        if entry.request_id == request_id {
+            found = true;
+            for sender in entry.senders.drain(..) {
+                let _ = sender.send(allow);
+            }
+            false
+        } else {
+            true
+        }
+    });
+    if !found {
+        return Err("没有等待中的配对请求".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_extension_dir<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {
+    if cfg!(debug_assertions) {
+        let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../extension");
+        if dev_dir.is_dir() {
+            let canonical = dev_dir.canonicalize().map_err(|err| err.to_string())?;
+            return Ok(canonical.to_string_lossy().to_string());
+        }
+    }
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|_| "Unable to resolve resource directory".to_string())?
+        .join("extension");
+    if resource_dir.is_dir() {
+        return Ok(resource_dir.to_string_lossy().to_string());
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|dir| dir.to_path_buf()))
+        .ok_or_else(|| "Unable to resolve executable directory".to_string())?
+        .join("extension");
+    if exe_dir.is_dir() {
+        return Ok(exe_dir.to_string_lossy().to_string());
+    }
+    Err("未找到浏览器扩展文件，请重新安装应用。".to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -942,6 +1640,7 @@ fn main() {
             if let Err(err) = register_quick_access_shortcut(app.handle(), &shortcut) {
                 eprintln!("Failed to register quick access shortcut: {err}");
             }
+            start_bridge_server(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -958,9 +1657,103 @@ fn main() {
             set_item_favorite,
             generate_password,
             copy_text,
+            get_totp,
             get_quick_access_shortcut,
-            set_quick_access_shortcut
+            set_quick_access_shortcut,
+            get_bridge_info,
+            regenerate_bridge_token,
+            list_bridge_origins,
+            revoke_bridge_origin,
+            respond_bridge_pairing,
+            get_extension_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running CaptainPassword");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    #[test]
+    fn totp_matches_rfc6238_vectors() {
+        // RFC 6238 SHA-1 vectors, truncated to 6 digits.
+        let cases = [
+            (59_u64, "287082"),
+            (1_111_111_109, "081804"),
+            (1_234_567_890, "005924"),
+            (2_000_000_000, "279037"),
+            (20_000_000_000, "353130"),
+        ];
+        for (time, expected) in cases {
+            let (code, remaining) = totp_code_at(RFC_SECRET, time).expect("totp succeeds");
+            assert_eq!(code, expected, "time={time}");
+            assert_eq!(remaining, 30 - (time % 30));
+        }
+    }
+
+    #[test]
+    fn base32_decode_handles_spacing_and_case() {
+        let decoded = decode_base32("gezd gnbv gy3t qojq gezd gnbv gy3t qojq").expect("decodes");
+        assert_eq!(decoded, b"12345678901234567890");
+    }
+
+    #[test]
+    fn base32_decode_rejects_invalid_characters() {
+        assert!(decode_base32("ABC@1!").is_err());
+        assert!(decode_base32("").is_err());
+    }
+
+    #[test]
+    fn totp_secret_normalization_accepts_otpauth_uri() {
+        let secret = normalize_totp_secret(
+            "otpauth://totp/GitHub:user@example.com?secret=gezdgnbvgy3tqojqgezdgnbvgy3tqojq&issuer=GitHub",
+        )
+        .expect("parses otpauth uri");
+        assert_eq!(secret, RFC_SECRET);
+    }
+
+    #[test]
+    fn totp_secret_normalization_accepts_raw_secret() {
+        let secret = normalize_totp_secret("gezd gnbv-gy3t qojq").expect("normalizes raw secret");
+        assert_eq!(secret, "GEZDGNBVGY3TQOJQ");
+        assert!(normalize_totp_secret("not base32 !!").is_err());
+        assert!(normalize_totp_secret("otpauth://totp/x?issuer=only").is_err());
+        assert_eq!(normalize_totp_secret("").unwrap(), "");
+        assert_eq!(normalize_totp_secret("  ").unwrap(), "");
+    }
+
+    #[test]
+    fn bridge_host_normalization_covers_urls_and_bare_hosts() {
+        assert_eq!(
+            normalize_bridge_host("https://github.com/login").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            normalize_bridge_host("HTTPS://Login.GitHub.com:443/").as_deref(),
+            Some("login.github.com")
+        );
+        assert_eq!(
+            normalize_bridge_host("http://user:pass@example.com:8080/x").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(normalize_bridge_host("example.com").as_deref(), Some("example.com"));
+        assert_eq!(normalize_bridge_host("example.com.").as_deref(), Some("example.com"));
+        assert_eq!(normalize_bridge_host("http://[::1]:3000/").as_deref(), Some("::1"));
+        assert_eq!(normalize_bridge_host("   "), None);
+        assert_eq!(normalize_bridge_host(""), None);
+    }
+
+    #[test]
+    fn bridge_hosts_match_allows_subdomains_and_www() {
+        assert!(bridge_hosts_match("github.com", "github.com"));
+        assert!(bridge_hosts_match("github.com", "gist.github.com"));
+        assert!(bridge_hosts_match("www.example.com", "example.com"));
+        assert!(bridge_hosts_match("example.com", "www.example.com"));
+        assert!(!bridge_hosts_match("github.com", "notgithub.com"));
+        assert!(!bridge_hosts_match("mail.github.com.evil.io", "github.com"));
+        assert!(!bridge_hosts_match("example.org", "example.com"));
+    }
 }

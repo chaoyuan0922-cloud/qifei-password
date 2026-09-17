@@ -27,6 +27,7 @@ export type LoginItem = {
   website: string;
   websites?: string[];
   website_labels?: string[];
+  totp_secret: string;
   notes: string;
   tags: string[];
   favorite: boolean;
@@ -55,6 +56,7 @@ export type LoginInput = {
   website: string;
   websites: string[];
   website_labels: string[];
+  totp_secret: string;
   notes: string;
   tags: string[];
 };
@@ -79,6 +81,17 @@ export type GeneratedPasswordOptions = {
 export type QuickAccessShortcut = {
   accelerator: string;
   keys: string[];
+};
+
+export type TotpCode = {
+  code: string;
+  remaining_seconds: number;
+  period_seconds: number;
+};
+
+export type BridgeInfo = {
+  port: number;
+  token: string;
 };
 
 export type AppUpdateInfo = {

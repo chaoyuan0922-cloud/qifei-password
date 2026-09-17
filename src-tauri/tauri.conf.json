@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "船长密码箱",
+        "title": "起飞密码箱",
         "width": 1220,
         "height": 780,
         "minWidth": 980,
@@ -27,7 +27,7 @@
       },
       {
         "label": "quick-search",
-        "title": "船长密码箱",
+        "title": "起飞密码箱",
         "url": "index.html?window=quick-search",
         "width": 380,
         "height": 190,
@@ -52,6 +52,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../extension/": "extension/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
