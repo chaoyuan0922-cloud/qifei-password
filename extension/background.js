@@ -1,4 +1,4 @@
-// CaptainPassword browser extension - background service worker.
+// FlyPassword browser extension - background service worker.
 // Bridges content scripts / popup to the desktop app's local HTTP bridge.
 
 const PORT_CANDIDATES = Array.from({ length: 40 }, (_, index) => 27124 + index);

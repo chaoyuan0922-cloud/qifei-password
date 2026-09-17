@@ -1,11 +1,11 @@
-// CaptainPassword browser extension - content script.
+// FlyPassword browser extension - content script.
 // Detects login / OTP fields and fills credentials from the desktop app.
 
 (() => {
   'use strict';
 
-  if (window.__captainPasswordInjected) return;
-  window.__captainPasswordInjected = true;
+  if (window.__flyPasswordInjected) return;
+  window.__flyPasswordInjected = true;
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -209,7 +209,7 @@
   const ensureMenuHost = () => {
     if (host) return;
     host = document.createElement('div');
-    host.id = 'captain-password-fill-host';
+    host.id = 'fly-password-fill-host';
     host.style.position = 'absolute';
     host.style.top = '0';
     host.style.left = '0';

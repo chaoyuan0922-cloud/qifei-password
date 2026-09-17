@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           body="$(cat <<'BODY'
-          CaptainPassword desktop builds for Windows x64, macOS Apple Silicon, and macOS Intel.
+          FlyPassword desktop builds for Windows x64, macOS Apple Silicon, and macOS Intel.
 
           macOS builds are ad-hoc signed to keep the app bundle structurally valid, but they are not notarized yet. macOS may still show a security warning until Developer ID signing and notarization are configured.
           BODY
@@ -123,10 +123,10 @@ jobs:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: 起飞密码箱 ${{ env.RELEASE_TAG }}
           releaseBody: |
-            CaptainPassword desktop builds for Windows x64, macOS Apple Silicon, and macOS Intel.
+            FlyPassword desktop builds for Windows x64, macOS Apple Silicon, and macOS Intel.
 
             macOS builds are ad-hoc signed to keep the app bundle structurally valid, but they are not notarized yet. macOS may still show a security warning until Developer ID signing and notarization are configured.
           releaseDraft: false
           prerelease: false
-          assetNamePattern: CaptainPassword-v[version]-${{ matrix.asset-suffix }}[ext]
+          assetNamePattern: FlyPassword-v[version]-${{ matrix.asset-suffix }}[ext]
           args: ${{ matrix.args }}

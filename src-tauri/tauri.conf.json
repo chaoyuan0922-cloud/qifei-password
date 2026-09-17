@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CaptainPassword",
-  "version": "0.1.9",
-  "identifier": "ai.heihuzi.captainpassword",
+  "productName": "FlyPassword",
+  "version": "0.2.0",
+  "identifier": "ai.heihuzi.flypassword",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",

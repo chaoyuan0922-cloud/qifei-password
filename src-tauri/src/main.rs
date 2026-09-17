@@ -1705,7 +1705,7 @@ fn main() {
             get_extension_dir
         ])
         .run(tauri::generate_context!())
-        .expect("error while running CaptainPassword");
+        .expect("error while running FlyPassword");
 }
 
 #[cfg(test)]

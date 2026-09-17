@@ -47,12 +47,12 @@ type Api = {
 };
 
 const demoItems: VaultItem[] = [];
-const browserVaultProfileStorageKey = 'captain.browserVaultProfile';
+const browserVaultProfileStorageKey = 'fly.browserVaultProfile';
 
 const fallbackVaultProfile: VaultProfile = { name: '本地保险库', avatar: '本' };
 const appVersion = packageJson.version;
-const githubLatestReleaseApiUrl = 'https://api.github.com/repos/heihuzicity-tech/CaptainPassword/releases/latest';
-const githubLatestReleasePageUrl = 'https://github.com/heihuzicity-tech/CaptainPassword/releases/latest';
+const githubLatestReleaseApiUrl = 'https://api.github.com/repos/chaoyuan0922-cloud/qifei-password/releases/latest';
+const githubLatestReleasePageUrl = 'https://github.com/chaoyuan0922-cloud/qifei-password/releases/latest';
 
 type GitHubRelease = {
   tag_name?: string;
@@ -227,7 +227,7 @@ const randomPassword = (options: GeneratedPasswordOptions) => {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
 };
 
-const quickAccessShortcutStorageKey = 'captain.quickAccessShortcut';
+const quickAccessShortcutStorageKey = 'fly.quickAccessShortcut';
 const defaultQuickAccessShortcut = (): QuickAccessShortcut =>
   navigator.platform.toLowerCase().includes('mac')
     ? { accelerator: 'Command+Alt+K', keys: ['⌥', '⌘', 'K'] }

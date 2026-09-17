@@ -1,10 +1,10 @@
 [package]
-name = "captain-password"
-version = "0.1.9"
+name = "fly-password"
+version = "0.2.0"
 description = "Local password vault desktop app"
 authors = ["zhangya"]
 license = ""
-repository = "https://github.com/heihuzicity-tech/CaptainPassword"
+repository = "https://github.com/chaoyuan0922-cloud/qifei-password"
 edition = "2021"
 
 [build-dependencies]

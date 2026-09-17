@@ -1,17 +1,17 @@
 # 起飞密码箱
 
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="96" alt="CaptainPassword app icon">
+  <img src="src-tauri/icons/128x128.png" width="96" alt="FlyPassword app icon">
 </p>
 
-<h3 align="center">CaptainPassword</h3>
+<h3 align="center">FlyPassword</h3>
 
 <p align="center">
   本地优先的桌面密码管理器。用主密码解锁本地保险库，管理登录信息、独立密码，并通过迷你查询窗口快速复制常用凭据。
 </p>
 
 <p align="center">
-  <a href="https://github.com/heihuzicity-tech/CaptainPassword/releases"><img src="https://img.shields.io/github/v/release/heihuzicity-tech/CaptainPassword?include_prereleases&label=release" alt="Release"></a>
+  <a href="https://github.com/chaoyuan0922-cloud/qifei-password/releases"><img src="https://img.shields.io/github/v/release/chaoyuan0922-cloud/qifei-password?include_prereleases&label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-0A84FF" alt="Platforms">
   <img src="https://img.shields.io/badge/built%20with-Tauri%20%2B%20React-24C8DB" alt="Built with Tauri and React">
 </p>
@@ -131,10 +131,10 @@
 ## 名称与包信息
 
 - 中文产品名：`起飞密码箱`
-- 英文产品名：`CaptainPassword`
-- GitHub 仓库名：`CaptainPassword`
-- npm package / Rust crate：`captain-password`
-- Bundle identifier：`ai.heihuzi.captainpassword`
+- 英文产品名：`FlyPassword`
+- GitHub 仓库名：`qifei-password`
+- npm package / Rust crate：`fly-password`
+- Bundle identifier：`ai.heihuzi.flypassword`
 
 Tauri 的 `productName` 保持 ASCII，是为了让 GitHub Release 产物在 macOS、Windows 上拥有稳定的文件名；用户看到的窗口标题仍然是 `起飞密码箱`。
 

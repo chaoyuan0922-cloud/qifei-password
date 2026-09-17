@@ -1,4 +1,4 @@
-// CaptainPassword browser extension - popup.
+// FlyPassword browser extension - popup.
 
 const statusEl = document.getElementById('status');
 const pairBox = document.getElementById('pairBox');
@@ -19,6 +19,26 @@ const send = (message) =>
 const activeTab = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
+};
+
+// Prefer the tab's own URL; fall back to asking the page directly when
+// Chrome does not expose it.
+const resolveOrigin = async (tab) => {
+  if (tab?.url && /^https?:/i.test(tab.url)) {
+    return new URL(tab.url).origin;
+  }
+  if (typeof tab?.id === 'number') {
+    try {
+      const [frame] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => window.location.origin,
+      });
+      if (frame?.result && /^https?:/i.test(frame.result)) return frame.result;
+    } catch {
+      // Page is not injectable (browser-internal page).
+    }
+  }
+  return '';
 };
 
 const setStatus = (text, tone = '') => {
@@ -109,9 +129,9 @@ const refresh = async () => {
   }
 
   const tab = await activeTab();
-  const origin = tab?.url ? new URL(tab.url).origin : '';
-  if (!/^https?:/.test(tab?.url ?? '')) {
-    setStatus('当前页面不支持自动填充。', 'warn');
+  const origin = await resolveOrigin(tab);
+  if (!origin) {
+    setStatus('当前页面不支持自动填充（仅支持 http/https 页面）。', 'warn');
     return;
   }
 
