@@ -362,7 +362,7 @@ const browserPreviewApi: Api = {
   },
   async getTotp(id: string) {
     const item = demoItems.find((entry) => entry.id === id);
-    if (item?.item_type !== 'login' || !item.totp_secret.trim()) return null;
+    if (item?.item_type !== 'login' || !item.totp_secret?.trim()) return null;
     try {
       return await computeTotpLocally(item.totp_secret);
     } catch {

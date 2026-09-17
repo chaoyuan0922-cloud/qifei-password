@@ -67,7 +67,7 @@ import {
   Wifi,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, Component, useEffect, useId, useMemo, useRef, useState, type ErrorInfo } from 'react';
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -317,7 +317,43 @@ const websitePatch = (
 
 export function App() {
   const [mode] = useState<AppWindowMode>(() => currentWindowMode());
-  return mode === 'quick-search' ? <QuickSearchWindow /> : <MainApp />;
+  return (
+    <AppErrorBoundary>
+      {mode === 'quick-search' ? <QuickSearchWindow /> : <MainApp />}
+    </AppErrorBoundary>
+  );
+}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('界面渲染出错', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="auth-shell">
+          <div className="auth-card">
+            <div className="auth-mark">
+              <Lock size={34} />
+            </div>
+            <h1>界面出现问题</h1>
+            <p>渲染时发生错误：{this.state.error.message || String(this.state.error)}</p>
+            <button className="primary-button auth-submit" onClick={() => window.location.reload()}>
+              重新加载
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function MainApp() {
@@ -1504,7 +1540,7 @@ function DetailPane({
                 onReveal={() => setRevealed((value) => !value)}
                 onCopy={() => copyValue(item.password)}
               />
-              {item.totp_secret.trim().length > 0 && <TotpFieldLine itemId={item.id} />}
+              {item.totp_secret?.trim().length > 0 && <TotpFieldLine itemId={item.id} />}
             </div>
             {itemWebsites.map((website, index) => (
               <section className="detail-section" key={`${index}-${website}`}>
@@ -1564,7 +1600,7 @@ const loginInputFromItem = (item: VaultItem): LoginInput => {
     website: item.website,
     websites,
     website_labels: websites.map((_, index) => item.website_labels?.[index] ?? defaultWebsiteLabel),
-    totp_secret: item.totp_secret,
+    totp_secret: item.totp_secret ?? '',
     notes: item.notes,
     tags: item.tags,
   };

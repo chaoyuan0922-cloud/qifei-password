@@ -547,6 +547,11 @@ fn details_value_with_favorite(
     let aad = format!("item-details:{id}");
     let mut details: serde_json::Value = decrypt_json(root_key, aad.as_bytes(), encrypted_details)?;
     if let Some(object) = details.as_object_mut() {
+        // Items created before the MFA feature lack these fields; fill them in
+        // so older vaults deserialize cleanly on the frontend.
+        if !object.contains_key("totp_secret") {
+            object.insert("totp_secret".to_string(), serde_json::Value::String(String::new()));
+        }
         object.insert("favorite".to_string(), serde_json::Value::Bool(favorite));
     }
     Ok(details)
@@ -1215,11 +1220,16 @@ fn collect_bridge_logins(
         else {
             continue;
         };
-        let matches = details
-            .websites
-            .iter()
-            .filter_map(|website| normalize_bridge_host(website))
-            .any(|host| bridge_hosts_match(&host, page_host));
+        let matches = {
+            let mut websites = details.websites.clone();
+            if websites.is_empty() && !details.website.trim().is_empty() {
+                websites.push(details.website.clone());
+            }
+            websites
+                .iter()
+                .filter_map(|website| normalize_bridge_host(website))
+                .any(|host| bridge_hosts_match(&host, page_host))
+        };
         if !matches {
             continue;
         }
@@ -1299,9 +1309,24 @@ fn bridge_wait_for_pairing<R: tauri::Runtime>(
         .map_err(|err| err.to_string())?;
     }
 
-    let decision = receiver
-        .recv_timeout(BRIDGE_PAIRING_TIMEOUT)
-        .unwrap_or(false);
+    let decision = match receiver.recv_timeout(BRIDGE_PAIRING_TIMEOUT) {
+        Ok(decision) => decision,
+        Err(_) => {
+            // Timed out. As the request that opened the dialog, drop the
+            // pending entry so later requests can start a fresh pairing.
+            if announce {
+                if let Ok(mut pending) = pairing.pending.lock() {
+                    if pending
+                        .get(page_host)
+                        .is_some_and(|entry| entry.request_id == request_id)
+                    {
+                        pending.remove(page_host);
+                    }
+                }
+            }
+            false
+        }
+    };
     Ok(decision)
 }
 
@@ -1462,6 +1487,15 @@ fn handle_bridge_request<R: tauri::Runtime>(
 
 fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     let result = (|| -> Result<(), String> {
+        let shared = std::sync::Arc::new(BridgeShared {
+            info: Mutex::new(None),
+            token: Mutex::new(random_bridge_token()),
+        });
+        // Managed before binding so the settings commands answer cleanly
+        // even when no bridge port could be opened.
+        app.manage(shared.clone());
+        app.manage(BridgePairing::default());
+
         let mut bound = None;
         for port in BRIDGE_PORT_CANDIDATES {
             if let Ok(server) = tiny_http::Server::http((BRIDGE_HOST, port)) {
@@ -1469,27 +1503,14 @@ fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 break;
             }
         }
-        let (server, port) =
-            bound.ok_or_else(|| "No free bridge port available".to_string())?;
-        let token = random_bridge_token();
-        let info = BridgeInfo { port, token: token.clone() };
+        let Some((server, port)) = bound else {
+            return Err("No free bridge port available".to_string());
+        };
+        let info = BridgeInfo { port, token: shared.token.lock().map_err(|_| "Bridge lock poisoned".to_string())?.clone() };
         persist_bridge_info(&info)?;
-
-        let shared = std::sync::Arc::new(BridgeShared {
-            info: Mutex::new(Some(info)),
-            token: Mutex::new(token),
-        });
-        if let Some(existing) = app.try_state::<BridgeShared>() {
-            if let Ok(mut guard) = existing.info.lock() {
-                *guard = shared.info.lock().ok().and_then(|guard| guard.clone());
-            }
-            if let (Ok(mut guard), Ok(new_guard)) = (existing.token.lock(), shared.token.lock()) {
-                *guard = new_guard.clone();
-            }
-        } else {
-            app.manage(shared.clone());
+        if let Ok(mut guard) = shared.info.lock() {
+            *guard = Some(info.clone());
         }
-        app.manage(BridgePairing::default());
 
         let server = std::sync::Arc::new(server);
         for worker in 0..3 {
@@ -1525,10 +1546,7 @@ fn get_bridge_info(state: tauri::State<BridgeShared>) -> Result<BridgeInfo, Stri
 }
 
 #[tauri::command]
-fn regenerate_bridge_token<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: tauri::State<BridgeShared>,
-) -> Result<BridgeInfo, String> {
+fn regenerate_bridge_token(state: tauri::State<BridgeShared>) -> Result<BridgeInfo, String> {
     let token = random_bridge_token();
     let info = {
         let port = state
@@ -1546,7 +1564,6 @@ fn regenerate_bridge_token<R: tauri::Runtime>(
         BridgeInfo { port, token }
     };
     persist_bridge_info(&info)?;
-    let _ = app;
     Ok(info)
 }
 
@@ -1755,5 +1772,29 @@ mod tests {
         assert!(!bridge_hosts_match("github.com", "notgithub.com"));
         assert!(!bridge_hosts_match("mail.github.com.evil.io", "github.com"));
         assert!(!bridge_hosts_match("example.org", "example.com"));
+    }
+
+    #[test]
+    fn details_value_backfills_missing_totp_secret_for_legacy_items() {
+        let root_key: [u8; 32] = std::array::from_fn(|index| (index % 251) as u8);
+        let legacy: serde_json::Value = serde_json::json!({
+            "id": "legacy-1",
+            "item_type": "login",
+            "title": "Old entry",
+            "username": "user",
+            "password": "pass",
+            "website": "https://example.com",
+            "notes": "",
+            "tags": [],
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        });
+        let encrypted =
+            encrypt_json(&root_key, b"item-details:legacy-1", &legacy).expect("encrypts");
+        let value = details_value_with_favorite(&root_key, "legacy-1", &encrypted, true)
+            .expect("decrypts");
+        assert_eq!(value["totp_secret"], "");
+        assert_eq!(value["favorite"], true);
+        assert_eq!(value["username"], "user");
     }
 }
