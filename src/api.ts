@@ -42,6 +42,9 @@ type Api = {
   regenerateBridgeToken(): Promise<BridgeInfo>;
   listBridgeOrigins(): Promise<string[]>;
   revokeBridgeOrigin(origin: string): Promise<string[]>;
+  addBridgeOrigin(origin: string): Promise<string[]>;
+  getBridgeTrustAll(): Promise<boolean>;
+  setBridgeTrustAll(enabled: boolean): Promise<boolean>;
   approveBridgeOrigin(origin: string, allow: boolean): Promise<void>;
   getExtensionDir(): Promise<string>;
 };
@@ -412,6 +415,15 @@ const browserPreviewApi: Api = {
   async revokeBridgeOrigin() {
     return [];
   },
+  async addBridgeOrigin() {
+    return [];
+  },
+  async getBridgeTrustAll() {
+    return false;
+  },
+  async setBridgeTrustAll() {
+    return false;
+  },
   async approveBridgeOrigin() {},
   async getExtensionDir() {
     return '';
@@ -442,6 +454,9 @@ const tauriApi: Api = {
   regenerateBridgeToken: () => invoke<BridgeInfo>('regenerate_bridge_token'),
   listBridgeOrigins: () => invoke<string[]>('list_bridge_origins'),
   revokeBridgeOrigin: (origin) => invoke<string[]>('revoke_bridge_origin', { origin }),
+  addBridgeOrigin: (origin) => invoke<string[]>('add_bridge_origin', { origin }),
+  getBridgeTrustAll: () => invoke<boolean>('get_bridge_trust_all'),
+  setBridgeTrustAll: (enabled) => invoke<boolean>('set_bridge_trust_all', { enabled }),
   approveBridgeOrigin: (origin, allow) => invoke<void>('approve_bridge_origin', { origin, allow }),
   getExtensionDir: () => invoke<string>('get_extension_dir'),
 };

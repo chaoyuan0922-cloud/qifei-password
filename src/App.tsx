@@ -2101,6 +2101,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 function BrowserBridgeSettings() {
   const [bridgeInfo, setBridgeInfo] = useState<BridgeInfo>();
   const [origins, setOrigins] = useState<string[]>([]);
+  const [trustAll, setTrustAll] = useState(false);
+  const [newOrigin, setNewOrigin] = useState('');
   const [extensionDir, setExtensionDir] = useState('');
   const [message, setMessage] = useState('');
   const [copiedToken, setCopiedToken] = useState(false);
@@ -2120,6 +2122,12 @@ function BrowserBridgeSettings() {
       .listBridgeOrigins()
       .then((next) => {
         if (!cancelled) setOrigins(next);
+      })
+      .catch(() => {});
+    api
+      .getBridgeTrustAll()
+      .then((enabled) => {
+        if (!cancelled) setTrustAll(enabled);
       })
       .catch(() => {});
     api
@@ -2157,6 +2165,27 @@ function BrowserBridgeSettings() {
     setMessage('');
     try {
       setOrigins(await api.revokeBridgeOrigin(origin));
+    } catch (err) {
+      setMessage(`操作失败：${String(err)}`);
+    }
+  };
+
+  const addOrigin = async () => {
+    const value = newOrigin.trim();
+    if (!value) return;
+    setMessage('');
+    try {
+      setOrigins(await api.addBridgeOrigin(value));
+      setNewOrigin('');
+    } catch (err) {
+      setMessage(`添加失败：${String(err)}`);
+    }
+  };
+
+  const toggleTrustAll = async () => {
+    setMessage('');
+    try {
+      setTrustAll(await api.setBridgeTrustAll(!trustAll));
     } catch (err) {
       setMessage(`操作失败：${String(err)}`);
     }
@@ -2202,8 +2231,20 @@ function BrowserBridgeSettings() {
           <h3 id="bridge-origins-title">已授权网站</h3>
           <p>这些网站可以请求自动填充保存的登录信息和 MFA 验证码。</p>
         </div>
+        <div className="bridge-token-row">
+          <input
+            className="bridge-origin-input"
+            value={newOrigin}
+            placeholder="输入网站域名，例如 example.com"
+            onChange={(event) => setNewOrigin(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && void addOrigin()}
+          />
+          <button className="secondary-button" disabled={!newOrigin.trim()} onClick={() => void addOrigin()}>
+            添加
+          </button>
+        </div>
         {origins.length === 0 ? (
-          <p className="bridge-empty">还没有授权任何网站。首次在浏览器中填充时会弹出授权确认。</p>
+          <p className="bridge-empty">还没有授权任何网站。也可以在浏览器中首次填充时按提示授权。</p>
         ) : (
           <div className="bridge-origin-list">
             {origins.map((origin) => (
@@ -2216,6 +2257,19 @@ function BrowserBridgeSettings() {
             ))}
           </div>
         )}
+        <div className="bridge-trust-row">
+          <div className="bridge-trust-copy">
+            <strong>信任所有网站</strong>
+            <span>开启后不再逐站弹窗确认（凭据仍按条目中的网站字段匹配，其他网站拿不到不匹配的凭据）。</span>
+          </div>
+          <button
+            type="button"
+            className={`switch ${trustAll ? 'on' : ''}`}
+            aria-pressed={trustAll}
+            aria-label="信任所有网站"
+            onClick={() => void toggleTrustAll()}
+          />
+        </div>
       </section>
 
       <section className="settings-panel-section" aria-labelledby="bridge-install-title">

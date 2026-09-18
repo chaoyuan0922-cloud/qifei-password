@@ -1,6 +1,6 @@
 [package]
 name = "fly-password"
-version = "0.2.3"
+version = "0.2.4"
 description = "Local password vault desktop app"
 authors = ["zhangya"]
 license = ""

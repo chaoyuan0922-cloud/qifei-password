@@ -1079,6 +1079,7 @@ const BRIDGE_HOST: &str = "127.0.0.1";
 const BRIDGE_PORT_RANGE: std::ops::RangeInclusive<u16> = 27124..=27163;
 const BRIDGE_MAX_BODY_BYTES: u64 = 64 * 1024;
 const BRIDGE_ALLOWED_ORIGINS_KEY: &str = "bridge_allowed_origins";
+const BRIDGE_TRUST_ALL_KEY: &str = "bridge_trust_all_sites";
 const BRIDGE_PAIRING_EVENT: &str = "bridge-pairing-request";
 const BRIDGE_PAIRING_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -1122,6 +1123,27 @@ fn read_allowed_bridge_origins(conn: &Connection) -> Result<Vec<String>, String>
         .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
         .unwrap_or_default();
     Ok(origins)
+}
+
+fn read_bridge_trust_all(conn: &Connection) -> Result<bool, String> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![BRIDGE_TRUST_ALL_KEY],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+    Ok(value.as_deref() == Some("true"))
+}
+
+fn write_bridge_trust_all(conn: &Connection, enabled: bool) -> Result<(), String> {
+    let value = if enabled { "true" } else { "false" };
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+        params![BRIDGE_TRUST_ALL_KEY, value],
+    )
+    .map(|_| ())
+    .map_err(|err| err.to_string())
 }
 
 /// Serializes allowlist read-modify-write cycles: concurrent fill requests
@@ -1344,9 +1366,11 @@ fn handle_bridge_logins<R: tauri::Runtime>(
         }
     };
 
-    if !allowed
-        .iter()
-        .any(|entry| bridge_hosts_match(entry, &page_host))
+    let trust_all = read_bridge_trust_all(&conn).unwrap_or(false);
+    if !trust_all
+        && !allowed
+            .iter()
+            .any(|entry| bridge_hosts_match(entry, &page_host))
     {
         bridge_announce_pairing(app, &page_host);
         bridge_json_response(request, 200, &serde_json::json!({ "status": "approval_required" }));
@@ -1581,6 +1605,29 @@ fn approve_bridge_origin(origin: String, allow: bool) -> Result<(), String> {
     add_allowed_bridge_origin(&conn, &page_host)
 }
 
+#[tauri::command]
+fn add_bridge_origin(origin: String) -> Result<Vec<String>, String> {
+    let Some(page_host) = normalize_bridge_host(&origin) else {
+        return Err("请输入有效的网站域名，例如 example.com".to_string());
+    };
+    let conn = open_db()?;
+    add_allowed_bridge_origin(&conn, &page_host)?;
+    read_allowed_bridge_origins(&conn)
+}
+
+#[tauri::command]
+fn get_bridge_trust_all() -> Result<bool, String> {
+    let conn = open_db()?;
+    read_bridge_trust_all(&conn)
+}
+
+#[tauri::command]
+fn set_bridge_trust_all(enabled: bool) -> Result<bool, String> {
+    let conn = open_db()?;
+    write_bridge_trust_all(&conn, enabled)?;
+    Ok(enabled)
+}
+
 fn display_path(path: &std::path::Path) -> String {
     let text = path.to_string_lossy().to_string();
     // Strip the Windows verbatim prefix so file pickers and browsers accept it.
@@ -1659,6 +1706,9 @@ fn main() {
             list_bridge_origins,
             revoke_bridge_origin,
             approve_bridge_origin,
+            add_bridge_origin,
+            get_bridge_trust_all,
+            set_bridge_trust_all,
             get_extension_dir
         ])
         .run(tauri::generate_context!())

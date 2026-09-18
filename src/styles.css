@@ -824,6 +824,44 @@ body.is-resizing-pane * {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 10px;
+}
+
+.bridge-origin-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 12px;
+  border: 1px solid #d4d7de;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.bridge-trust-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid #e3e5ea;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.bridge-trust-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bridge-trust-copy strong {
+  font-size: 13px;
+}
+
+.bridge-trust-copy span {
+  color: #74777f;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .bridge-origin-row {
