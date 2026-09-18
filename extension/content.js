@@ -92,24 +92,39 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
+  // Some SPA frameworks (antd/Vue/React variants) reset programmatic value
+  // changes; retype the text as if the user typed it until it sticks.
+  const forceFill = (input, value) => {
+    setNativeValue(input, value);
+    if (input.value === value) return true;
+    try {
+      input.focus();
+      document.execCommand('selectAll', false, null);
+      if (!document.execCommand('insertText', false, value)) {
+        throw new Error('insertText rejected');
+      }
+    } catch {
+      setNativeValue(input, value);
+    }
+    return input.value === value;
+  };
+
   const fillCredential = (item) => {
     const passwordField = findPasswordField();
     let filled = false;
     if (passwordField) {
-      setNativeValue(passwordField, item.password ?? '');
+      filled = forceFill(passwordField, item.password ?? '');
       const usernameField = findUsernameField(passwordField);
       if (usernameField && item.username) {
-        setNativeValue(usernameField, item.username);
+        forceFill(usernameField, item.username);
       }
-      filled = true;
     } else {
       // Password-less username step: fill the focused or first visible username field.
       const usernameField =
         (document.activeElement && isUsernameCandidate(document.activeElement) && document.activeElement) ||
         Array.from(document.querySelectorAll('input')).find((element) => isUsernameCandidate(element) && isVisible(element));
       if (usernameField && item.username) {
-        setNativeValue(usernameField, item.username);
-        filled = true;
+        filled = forceFill(usernameField, item.username);
       }
     }
     if (filled) {
@@ -117,8 +132,19 @@
       if (item.totp_code) {
         pendingOtpItem = item;
       }
-      hideMenu();
       void runtimeSend({ type: 'markLastFilled', item });
+      const feedbackAnchor = anchorField || passwordField || usernameField || document.body;
+      hideMenu();
+      showMenu(
+        feedbackAnchor,
+        [{ info: true, title: '✓ 已填充', subtitle: item.title || '' }],
+        '',
+      );
+      window.setTimeout(() => {
+        if (anchorField === feedbackAnchor && menu && menu.style.display !== 'none') {
+          hideMenu();
+        }
+      }, 1500);
     }
     return filled;
   };

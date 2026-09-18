@@ -1124,7 +1124,14 @@ fn read_allowed_bridge_origins(conn: &Connection) -> Result<Vec<String>, String>
     Ok(origins)
 }
 
+/// Serializes allowlist read-modify-write cycles: concurrent fill requests
+/// can otherwise authorize the same host twice.
+static BRIDGE_ALLOWLIST_LOCK: Mutex<()> = Mutex::new(());
+
 fn add_allowed_bridge_origin(conn: &Connection, host: &str) -> Result<(), String> {
+    let _guard = BRIDGE_ALLOWLIST_LOCK
+        .lock()
+        .map_err(|_| "Allowlist lock poisoned".to_string())?;
     let mut origins = read_allowed_bridge_origins(conn)?;
     if !origins.iter().any(|origin| origin == host) {
         origins.push(host.to_string());
@@ -1545,6 +1552,9 @@ fn list_bridge_origins() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn revoke_bridge_origin(origin: String) -> Result<Vec<String>, String> {
+    let _guard = BRIDGE_ALLOWLIST_LOCK
+        .lock()
+        .map_err(|_| "Allowlist lock poisoned".to_string())?;
     let conn = open_db()?;
     let remaining: Vec<String> = read_allowed_bridge_origins(&conn)?
         .into_iter()
