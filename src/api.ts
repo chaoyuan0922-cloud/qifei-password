@@ -45,6 +45,8 @@ type Api = {
   addBridgeOrigin(origin: string): Promise<string[]>;
   getBridgeTrustAll(): Promise<boolean>;
   setBridgeTrustAll(enabled: boolean): Promise<boolean>;
+  getIdleLockMinutes(): Promise<number>;
+  setIdleLockMinutes(minutes: number): Promise<number>;
   approveBridgeOrigin(origin: string, allow: boolean): Promise<void>;
   getExtensionDir(): Promise<string>;
 };
@@ -424,6 +426,12 @@ const browserPreviewApi: Api = {
   async setBridgeTrustAll() {
     return false;
   },
+  async getIdleLockMinutes() {
+    return 10;
+  },
+  async setIdleLockMinutes(minutes: number) {
+    return minutes;
+  },
   async approveBridgeOrigin() {},
   async getExtensionDir() {
     return '';
@@ -457,6 +465,8 @@ const tauriApi: Api = {
   addBridgeOrigin: (origin) => invoke<string[]>('add_bridge_origin', { origin }),
   getBridgeTrustAll: () => invoke<boolean>('get_bridge_trust_all'),
   setBridgeTrustAll: (enabled) => invoke<boolean>('set_bridge_trust_all', { enabled }),
+  getIdleLockMinutes: () => invoke<number>('get_idle_lock_minutes'),
+  setIdleLockMinutes: (minutes) => invoke<number>('set_idle_lock_minutes', { minutes }),
   approveBridgeOrigin: (origin, allow) => invoke<void>('approve_bridge_origin', { origin, allow }),
   getExtensionDir: () => invoke<string>('get_extension_dir'),
 };

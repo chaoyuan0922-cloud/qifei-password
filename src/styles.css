@@ -864,6 +864,26 @@ body.is-resizing-pane * {
   line-height: 1.6;
 }
 
+.idle-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.idle-lock-row label {
+  font-size: 13px;
+  color: #333740;
+}
+
+.idle-lock-select {
+  padding: 7px 10px;
+  border: 1px solid #d4d7de;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  color: #282b31;
+}
+
 .bridge-origin-row {
   display: flex;
   align-items: center;

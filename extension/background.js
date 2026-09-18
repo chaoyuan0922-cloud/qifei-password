@@ -5,6 +5,10 @@ const PORT_CANDIDATES = Array.from({ length: 40 }, (_, index) => 27124 + index);
 const HOST_CANDIDATES = ['http://127.0.0.1', 'http://localhost'];
 
 const lastFilledByTab = new Map();
+// Full port scans are expensive when the desktop app is not running;
+// suppress repeated scans for a short grace period.
+const SCAN_RETRY_INTERVAL_MS = 8000;
+let lastScanFailureAt = 0;
 
 const storageGet = (keys) => chrome.storage.local.get(keys);
 const storageSet = (values) => chrome.storage.local.set(values);
@@ -39,6 +43,9 @@ async function bridgeRequest(path, { method = 'GET', body } = {}) {
   };
 
   const cached = bridgePort ? `${bridgeHost || HOST_CANDIDATES[0]}:${bridgePort}` : null;
+  if (!cached && Date.now() - lastScanFailureAt < SCAN_RETRY_INTERVAL_MS) {
+    throw new Error('BRIDGE_UNREACHABLE');
+  }
   const candidates = cached ? [cached, ...buildCandidates().filter((entry) => entry !== cached)] : buildCandidates();
 
   let lastError = null;
@@ -61,11 +68,15 @@ async function bridgeRequest(path, { method = 'GET', body } = {}) {
       }
       const [host, port] = entry.replace(/^https?:\/\//, '').split(':');
       await storageSet({ bridgePort: Number(port), bridgeHost: `http://${host}` });
+      lastScanFailureAt = 0;
       return result;
     } catch (err) {
       if (err.message === 'NOT_PAIRED') throw err;
       lastError = err;
     }
+  }
+  if (!cached || sawUnauthorized) {
+    lastScanFailureAt = Date.now();
   }
   if (sawUnauthorized) throw new Error('UNAUTHORIZED');
   throw lastError || new Error('BRIDGE_UNREACHABLE');
@@ -129,24 +140,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (response?.ok) {
             lastFilledByTab.set(tabId, message.item);
           }
-          sendResponse(response ?? { ok: false, error: '页面未响应' });
-          return;
-        }
-        case 'fillOtp': {
-          const tabId = message.tabId;
-          const itemId = message.itemId;
-          const origin = message.origin;
-          // Refresh credentials so the code is current, then fill the OTP field.
-          const payload = await getCredentials(origin);
-          const item = (payload.items ?? []).find((entry) => entry.id === itemId);
-          if (!item?.totp_code) {
-            sendResponse({ ok: false, error: '该条目没有可用验证码' });
-            return;
-          }
-          const response = await chrome.tabs.sendMessage(tabId, {
-            type: 'performOtpFill',
-            code: item.totp_code,
-          });
           sendResponse(response ?? { ok: false, error: '页面未响应' });
           return;
         }

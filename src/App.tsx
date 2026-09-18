@@ -375,6 +375,7 @@ function MainApp() {
   const [error, setError] = useState('');
   const [pairingRequest, setPairingRequest] = useState<BridgePairingRequest>();
   const [pairingBusy, setPairingBusy] = useState(false);
+  const [idleLockMinutes, setIdleLockMinutes] = useState(10);
 
   const shellStyle = useMemo(
     () =>
@@ -424,6 +425,48 @@ function MainApp() {
     });
     return () => dispose?.();
   }, []);
+
+  useEffect(() => {
+    const loadIdleMinutes = () => {
+      api
+        .getIdleLockMinutes()
+        .then((minutes) => setIdleLockMinutes(Number.isFinite(minutes) ? minutes : 10))
+        .catch(() => {});
+    };
+    loadIdleMinutes();
+    window.addEventListener('focus', loadIdleMinutes);
+    return () => window.removeEventListener('focus', loadIdleMinutes);
+  }, []);
+
+  useEffect(() => {
+    if (status !== 'unlocked' || idleLockMinutes <= 0) return undefined;
+    let timer = 0;
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void (async () => {
+          try {
+            const nextStatus = await api.lock();
+            if (nextStatus === 'locked') {
+              setSelectedId(undefined);
+              setSelectedItem(undefined);
+              setStatus('locked');
+              await hideQuickSearchWindow();
+            }
+          } catch {
+            // Ignore; user can still lock manually.
+          }
+        })();
+      }, idleLockMinutes * 60_000);
+    };
+    const events: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'mousedown', 'scroll'];
+    events.forEach((event) => window.addEventListener(event, arm, { passive: true }));
+    arm();
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, arm));
+    };
+  }, [status, idleLockMinutes]);
 
   const respondPairing = async (allow: boolean) => {
     if (!pairingRequest) return;
@@ -631,7 +674,13 @@ function MainApp() {
         />
       )}
 
-      {overlay.kind === 'settings' && <SettingsModal onClose={() => setOverlay({ kind: 'none' })} />}
+      {overlay.kind === 'settings' && (
+        <SettingsModal
+          onClose={() => setOverlay({ kind: 'none' })}
+          idleLockMinutes={idleLockMinutes}
+          onIdleLockMinutesChange={setIdleLockMinutes}
+        />
+      )}
 
       {pairingRequest && (
         <div className="overlay">
@@ -876,6 +925,7 @@ function QuickSearchWindow() {
   const [expanded, setExpanded] = useState(true);
   const [pinned, setPinned] = useState(false);
   const [copiedFieldId, setCopiedFieldId] = useState<string>();
+  const [totpState, setTotpState] = useState<{ code: string; remaining: number }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -979,7 +1029,41 @@ function QuickSearchWindow() {
     };
   }, [selectedOverview, status]);
 
-  const quickFields = useMemo(() => (selectedItem ? quickCopyFieldsForItem(selectedItem) : []), [selectedItem]);
+  useEffect(() => {
+    setTotpState(undefined);
+    if (status !== 'unlocked' || selectedItem?.item_type !== 'login' || !selectedItem.totp_secret?.trim()) {
+      return undefined;
+    }
+    let cancelled = false;
+    const itemId = selectedItem.id;
+    const tick = async () => {
+      try {
+        const next = await api.getTotp(itemId);
+        if (!cancelled) setTotpState(next ? { code: next.code, remaining: next.remaining_seconds } : undefined);
+      } catch {
+        if (!cancelled) setTotpState(undefined);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedItem, status]);
+
+  const quickFields = useMemo(() => {
+    if (!selectedItem) return [] as QuickCopyField[];
+    const fields = quickCopyFieldsForItem(selectedItem);
+    if (
+      totpState &&
+      selectedItem.item_type === 'login' &&
+      selectedItem.totp_secret?.trim()
+    ) {
+      fields.push({ id: 'totp', label: 'MFA 验证码', value: totpState.code });
+    }
+    return fields;
+  }, [selectedItem, totpState]);
   const primaryField = quickFields.find((field) => field.primary) ?? quickFields[0];
   const visibleFields = expanded ? quickFields : quickFields.slice(0, 2);
   const clearQuickSearch = useCallback(() => {
@@ -1821,7 +1905,15 @@ function TotpFieldLine({ itemId }: { itemId: string }) {
   );
 }
 
-function SettingsModal({ onClose }: { onClose: () => void }) {
+function SettingsModal({
+  onClose,
+  idleLockMinutes,
+  onIdleLockMinutesChange,
+}: {
+  onClose: () => void;
+  idleLockMinutes: number;
+  onIdleLockMinutesChange: (minutes: number) => void;
+}) {
   const [activeSection, setActiveSection] = useState<'general' | 'browser'>('general');
   const [savedShortcut, setSavedShortcut] = useState<ShortcutConfig>(() => defaultQuickAccessShortcut());
   const [draftShortcut, setDraftShortcut] = useState<ShortcutConfig>(() => defaultQuickAccessShortcut());
@@ -2013,6 +2105,32 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
           {activeSection === 'general' ? (
           <section className="settings-panel" aria-label="通用设置">
+            <section className="settings-panel-section" aria-labelledby="security-settings-title">
+              <div className="settings-panel-heading">
+                <h3 id="security-settings-title">安全</h3>
+                <p>解锁状态下长时间无操作时自动锁定保险库。</p>
+              </div>
+              <div className="idle-lock-row">
+                <label htmlFor="idle-lock-select">自动锁定</label>
+                <select
+                  id="idle-lock-select"
+                  className="idle-lock-select"
+                  value={idleLockMinutes}
+                  onChange={(event) => {
+                    const minutes = Number(event.target.value);
+                    onIdleLockMinutesChange(minutes);
+                    void api.setIdleLockMinutes(minutes).catch(() => {});
+                  }}
+                >
+                  <option value={1}>1 分钟</option>
+                  <option value={5}>5 分钟</option>
+                  <option value={10}>10 分钟</option>
+                  <option value={30}>30 分钟</option>
+                  <option value={0}>从不</option>
+                </select>
+              </div>
+            </section>
+
             <section className="settings-panel-section" aria-labelledby="shortcut-settings-title">
               <div className="settings-panel-heading">
                 <h3 id="shortcut-settings-title">快捷键</h3>

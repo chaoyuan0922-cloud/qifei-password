@@ -159,6 +159,8 @@ struct ShortcutPreference {
 }
 
 const DEFAULT_VAULT_PROFILE_NAME: &str = "本地保险库";
+const IDLE_LOCK_MINUTES_KEY: &str = "idle_lock_minutes";
+const DEFAULT_IDLE_LOCK_MINUTES: u32 = 10;
 
 fn data_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
@@ -555,6 +557,33 @@ fn details_value_with_favorite(
         object.insert("favorite".to_string(), serde_json::Value::Bool(favorite));
     }
     Ok(details)
+}
+
+#[tauri::command]
+fn get_idle_lock_minutes() -> Result<u32, String> {
+    let conn = open_db()?;
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![IDLE_LOCK_MINUTES_KEY],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+    Ok(value
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_IDLE_LOCK_MINUTES))
+}
+
+#[tauri::command]
+fn set_idle_lock_minutes(minutes: u32) -> Result<u32, String> {
+    let conn = open_db()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+        params![IDLE_LOCK_MINUTES_KEY, minutes.to_string()],
+    )
+    .map(|_| ())
+    .map_err(|err| err.to_string())?;
+    Ok(minutes)
 }
 
 #[tauri::command]
@@ -1709,6 +1738,8 @@ fn main() {
             add_bridge_origin,
             get_bridge_trust_all,
             set_bridge_trust_all,
+            get_idle_lock_minutes,
+            set_idle_lock_minutes,
             get_extension_dir
         ])
         .run(tauri::generate_context!())
