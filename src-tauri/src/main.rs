@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, sync::Mutex};
 
-use std::{collections::HashMap, io::Read, sync::mpsc, time::Duration};
+use std::{collections::HashMap, io::Read, time::Duration};
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -1078,9 +1078,9 @@ fn set_quick_access_shortcut<R: tauri::Runtime>(
 const BRIDGE_HOST: &str = "127.0.0.1";
 const BRIDGE_PORT_RANGE: std::ops::RangeInclusive<u16> = 27124..=27163;
 const BRIDGE_MAX_BODY_BYTES: u64 = 64 * 1024;
-const BRIDGE_PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 const BRIDGE_ALLOWED_ORIGINS_KEY: &str = "bridge_allowed_origins";
 const BRIDGE_PAIRING_EVENT: &str = "bridge-pairing-request";
+const BRIDGE_PAIRING_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Serialize, Deserialize, Clone)]
 struct BridgeInfo {
@@ -1091,16 +1091,7 @@ struct BridgeInfo {
 struct BridgeShared {
     info: Mutex<Option<BridgeInfo>>,
     token: Mutex<String>,
-}
-
-struct PairingEntry {
-    request_id: String,
-    senders: Vec<mpsc::SyncSender<bool>>,
-}
-
-#[derive(Default)]
-struct BridgePairing {
-    pending: Mutex<HashMap<String, PairingEntry>>,
+    announced: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 fn bridge_file_path() -> Result<PathBuf, String> {
@@ -1274,59 +1265,30 @@ fn bridge_unauthorized(request: tiny_http::Request) {
     bridge_json_response(request, 401, &serde_json::json!({ "status": "unauthorized" }));
 }
 
-fn bridge_wait_for_pairing<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    page_host: &str,
-) -> Result<bool, String> {
-    let pairing = app.state::<BridgePairing>();
-    let (sender, receiver) = mpsc::sync_channel::<bool>(1);
-    let request_id = Uuid::new_v4().to_string();
-    let mut announce = false;
-
-    {
-        let mut pending = pairing
-            .pending
-            .lock()
-            .map_err(|_| "Pairing lock poisoned".to_string())?;
-        let entry = pending
-            .entry(page_host.to_string())
-            .or_insert_with(|| {
-                announce = true;
-                PairingEntry {
-                    request_id: request_id.clone(),
-                    senders: Vec::new(),
-                }
-            });
-        entry.senders.push(sender);
-    }
-
-    if announce {
-        app.emit(
-            BRIDGE_PAIRING_EVENT,
-            serde_json::json!({ "request_id": request_id, "origin": page_host }),
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    let decision = match receiver.recv_timeout(BRIDGE_PAIRING_TIMEOUT) {
-        Ok(decision) => decision,
-        Err(_) => {
-            // Timed out. As the request that opened the dialog, drop the
-            // pending entry so later requests can start a fresh pairing.
-            if announce {
-                if let Ok(mut pending) = pairing.pending.lock() {
-                    if pending
-                        .get(page_host)
-                        .is_some_and(|entry| entry.request_id == request_id)
-                    {
-                        pending.remove(page_host);
-                    }
-                }
+/// Notifies the frontend that a website wants pairing access, throttled so
+/// repeated fill attempts do not spam dialogs.
+fn bridge_announce_pairing<R: tauri::Runtime>(app: &tauri::AppHandle<R>, page_host: &str) {
+    let shared = app.state::<BridgeShared>();
+    let should_announce = shared
+        .announced
+        .lock()
+        .map(|mut announced| {
+            let now = std::time::Instant::now();
+            let stale = announced
+                .get(page_host)
+                .is_none_or(|last| now.duration_since(*last) > BRIDGE_PAIRING_ANNOUNCE_INTERVAL);
+            if stale {
+                announced.insert(page_host.to_string(), now);
             }
-            false
-        }
-    };
-    Ok(decision)
+            stale
+        })
+        .unwrap_or(false);
+    if should_announce {
+        let _ = app.emit(
+            BRIDGE_PAIRING_EVENT,
+            serde_json::json!({ "origin": page_host }),
+        );
+    }
 }
 
 fn handle_bridge_logins<R: tauri::Runtime>(
@@ -1379,15 +1341,9 @@ fn handle_bridge_logins<R: tauri::Runtime>(
         .iter()
         .any(|entry| bridge_hosts_match(entry, &page_host))
     {
-        let decision = bridge_wait_for_pairing(app, &page_host).unwrap_or(false);
-        if !decision {
-            bridge_json_response(request, 200, &serde_json::json!({ "status": "denied" }));
-            return;
-        }
-        if let Err(err) = add_allowed_bridge_origin(&conn, &page_host) {
-            bridge_json_response(request, 500, &serde_json::json!({ "status": "error", "message": err }));
-            return;
-        }
+        bridge_announce_pairing(app, &page_host);
+        bridge_json_response(request, 200, &serde_json::json!({ "status": "approval_required" }));
+        return;
     }
 
     match collect_bridge_logins(&root_key, &page_host) {
@@ -1491,8 +1447,8 @@ fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     app.manage(BridgeShared {
         info: Mutex::new(None),
         token: Mutex::new(random_bridge_token()),
+        announced: Mutex::new(HashMap::new()),
     });
-    app.manage(BridgePairing::default());
 
     let mut bound = None;
     let mut last_bind_error = String::new();
@@ -1604,31 +1560,15 @@ fn revoke_bridge_origin(origin: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn respond_bridge_pairing(
-    request_id: String,
-    allow: bool,
-    pairing: tauri::State<BridgePairing>,
-) -> Result<(), String> {
-    let mut pending = pairing
-        .pending
-        .lock()
-        .map_err(|_| "Pairing lock poisoned".to_string())?;
-    let mut found = false;
-    pending.retain(|_, entry| {
-        if entry.request_id == request_id {
-            found = true;
-            for sender in entry.senders.drain(..) {
-                let _ = sender.send(allow);
-            }
-            false
-        } else {
-            true
-        }
-    });
-    if !found {
-        return Err("没有等待中的配对请求".to_string());
+fn approve_bridge_origin(origin: String, allow: bool) -> Result<(), String> {
+    let Some(page_host) = normalize_bridge_host(&origin) else {
+        return Err("无效的网站地址".to_string());
+    };
+    if !allow {
+        return Ok(());
     }
-    Ok(())
+    let conn = open_db()?;
+    add_allowed_bridge_origin(&conn, &page_host)
 }
 
 fn display_path(path: &std::path::Path) -> String {
@@ -1708,7 +1648,7 @@ fn main() {
             regenerate_bridge_token,
             list_bridge_origins,
             revoke_bridge_origin,
-            respond_bridge_pairing,
+            approve_bridge_origin,
             get_extension_dir
         ])
         .run(tauri::generate_context!())

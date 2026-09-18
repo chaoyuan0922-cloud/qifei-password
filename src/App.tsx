@@ -105,7 +105,6 @@ type Overlay =
   | { kind: 'editor'; itemType: ItemType }
   | { kind: 'settings' };
 type BridgePairingRequest = {
-  request_id: string;
   origin: string;
 };
 type SidebarView = 'all' | 'favorites';
@@ -430,7 +429,7 @@ function MainApp() {
     if (!pairingRequest) return;
     setPairingBusy(true);
     try {
-      await api.respondBridgePairing(pairingRequest.request_id, allow);
+      await api.approveBridgeOrigin(pairingRequest.origin, allow);
     } catch (err) {
       setError(String(err));
     } finally {

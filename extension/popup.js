@@ -8,12 +8,31 @@ const itemsEl = document.getElementById('items');
 const refreshButton = document.getElementById('refreshButton');
 const forgetButton = document.getElementById('forgetButton');
 
-const send = (message) =>
+const send = (message, timeoutMs = 8000) =>
   new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      void chrome.runtime.lastError;
-      resolve(response ?? { ok: false, error: 'no response' });
-    });
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        ok: false,
+        error: '扩展后台无响应，请在 chrome://extensions 中重新加载扩展',
+      });
+    }, timeoutMs);
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        void chrome.runtime.lastError;
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(response ?? { ok: false, error: 'no response' });
+      });
+    } catch (err) {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve({ ok: false, error: String(err) });
+    }
   });
 
 const activeTab = async () => {
@@ -145,8 +164,8 @@ const refresh = async () => {
     setStatus('保险库已锁定，请先在应用中解锁。', 'warn');
     return;
   }
-  if (data.status === 'denied') {
-    setStatus('该网站尚未授权，请在应用「设置 → 浏览器扩展」中允许。', 'warn');
+  if (data.status === 'approval_required') {
+    setStatus('请在应用弹出的授权框中点「永久允许」，然后点「刷新」。', 'warn');
     return;
   }
   if (data.status !== 'ok') {

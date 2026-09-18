@@ -171,6 +171,8 @@
       color: inherit;
     }
     .cp-item:hover, .cp-item:focus { background: #f2f4fa; outline: none; }
+    .cp-info { cursor: default; color: #55585f; }
+    .cp-info .cp-avatar { background: #f0b429; }
     .cp-avatar {
       flex: none;
       width: 28px;
@@ -249,6 +251,25 @@
     ensureMenuHost();
     menu.replaceChildren();
     for (const entry of entries) {
+      if (entry.info) {
+        const info = document.createElement('div');
+        info.className = 'cp-item cp-info';
+        const avatar = document.createElement('span');
+        avatar.className = 'cp-avatar';
+        avatar.textContent = '⏳';
+        const text = document.createElement('span');
+        text.className = 'cp-text';
+        const title = document.createElement('div');
+        title.className = 'cp-title';
+        title.textContent = entry.title;
+        const sub = document.createElement('div');
+        sub.className = 'cp-sub';
+        sub.textContent = entry.subtitle || '';
+        text.append(title, sub);
+        info.append(avatar, text);
+        menu.appendChild(info);
+        continue;
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'cp-item';
@@ -368,8 +389,59 @@
     const isPasswordField = field instanceof HTMLInputElement && field.type === 'password';
     if (!isPasswordField && !isUsernameCandidate(field)) return;
     const payload = await requestCredentials();
+    if (payload?.status === 'approval_required') {
+      showMenu(
+        field,
+        [
+          {
+            info: true,
+            title: '等待应用授权…',
+            subtitle: '请切换到起飞密码箱，点击「永久允许」',
+          },
+        ],
+        '授权通过后将自动显示凭据',
+      );
+      void pollApproval(field);
+      return;
+    }
     if (payload?.status === 'ok' && payload.items?.length > 0) {
       showCredentialMenu(field, payload.items);
+    }
+  };
+
+  let approvalPollTimer = null;
+
+  const pollApproval = async (field) => {
+    if (approvalPollTimer) {
+      window.clearTimeout(approvalPollTimer);
+      approvalPollTimer = null;
+    }
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => {
+        approvalPollTimer = window.setTimeout(resolve, 2000);
+      });
+      if (anchorField !== field || !menu || menu.style.display === 'none') return;
+      const payload = await requestCredentials(true);
+      if (payload?.status === 'ok') {
+        if (anchorField === field) {
+          showCredentialMenu(field, payload.items ?? []);
+        }
+        return;
+      }
+      if (payload?.status !== 'approval_required') return;
+    }
+    if (anchorField === field) {
+      showMenu(
+        field,
+        [
+          {
+            info: true,
+            title: '尚未完成授权',
+            subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
+          },
+        ],
+        '由起飞密码箱填充',
+      );
     }
   };
 

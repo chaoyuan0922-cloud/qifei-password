@@ -42,7 +42,7 @@ type Api = {
   regenerateBridgeToken(): Promise<BridgeInfo>;
   listBridgeOrigins(): Promise<string[]>;
   revokeBridgeOrigin(origin: string): Promise<string[]>;
-  respondBridgePairing(requestId: string, allow: boolean): Promise<void>;
+  approveBridgeOrigin(origin: string, allow: boolean): Promise<void>;
   getExtensionDir(): Promise<string>;
 };
 
@@ -412,7 +412,7 @@ const browserPreviewApi: Api = {
   async revokeBridgeOrigin() {
     return [];
   },
-  async respondBridgePairing() {},
+  async approveBridgeOrigin() {},
   async getExtensionDir() {
     return '';
   },
@@ -442,7 +442,7 @@ const tauriApi: Api = {
   regenerateBridgeToken: () => invoke<BridgeInfo>('regenerate_bridge_token'),
   listBridgeOrigins: () => invoke<string[]>('list_bridge_origins'),
   revokeBridgeOrigin: (origin) => invoke<string[]>('revoke_bridge_origin', { origin }),
-  respondBridgePairing: (requestId, allow) => invoke<void>('respond_bridge_pairing', { requestId, allow }),
+  approveBridgeOrigin: (origin, allow) => invoke<void>('approve_bridge_origin', { origin, allow }),
   getExtensionDir: () => invoke<string>('get_extension_dir'),
 };
 
