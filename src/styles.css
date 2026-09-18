@@ -6,6 +6,7 @@
   position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-width, 276px) 1fr;
+  grid-template-rows: minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
   min-width: 980px;
@@ -163,8 +164,10 @@
 
 .main-area {
   display: grid;
-  grid-template-rows: 50px 1fr;
+  grid-template-rows: 50px minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .top-toolbar {
@@ -258,7 +261,10 @@
 }
 
 .item-list-pane {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--border);
   background: #fff;
   overflow: hidden;
@@ -273,6 +279,7 @@ body.is-resizing-pane * {
 .list-head {
   display: grid;
   align-content: center;
+  flex-shrink: 0;
   height: 72px;
   padding: 0 24px;
 }
@@ -442,6 +449,7 @@ body.is-resizing-pane * {
 }
 
 .month-label {
+  flex-shrink: 0;
   padding: 0 24px 12px;
   color: #777b84;
   font-size: var(--font-size-body-medium);
@@ -449,10 +457,13 @@ body.is-resizing-pane * {
 }
 
 .item-list {
+  flex: 1;
+  min-height: 0;
   display: grid;
+  align-content: start;
   gap: 2px;
   padding: 0 12px 24px;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .item-row {
