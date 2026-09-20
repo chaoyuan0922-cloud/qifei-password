@@ -145,7 +145,7 @@
       hideMenu();
       showMenu(
         feedbackAnchor,
-        [{ info: true, title: '✓ 已填充', subtitle: item.title || '' }],
+        [{ info: true, icon: '✓', title: '已填充', subtitle: item.title || '' }],
         '',
       );
       window.setTimeout(() => {
@@ -157,16 +157,49 @@
     return filled;
   };
 
-  const fillOtpCode = (field, code) => {
-    const target =
-      (field && isOtpField(field) && field) ||
-      (document.activeElement && isOtpField(document.activeElement) && document.activeElement) ||
-      Array.from(document.querySelectorAll('input')).find(isOtpField);
+  const queryOtpField = () => {
+    const focused = document.activeElement;
+    if (focused && isOtpField(focused)) return focused;
+    return Array.from(document.querySelectorAll('input')).find(isOtpField) || null;
+  };
+
+  const fillOtpCode = async (field, code) => {
+    const locate = () => {
+      if (field && field.isConnected && isOtpField(field)) return field;
+      return queryOtpField();
+    };
+    let target = locate();
     if (!target) return false;
     forceFill(target, code);
-    target.focus();
-    hideMenu();
-    return true;
+    if (target.value !== code) {
+      // Frameworks may replace the node right after a click; wait for the
+      // fresh element and try again.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      target = locate() || target;
+      forceFill(target, code);
+    }
+    if (target.value === code) {
+      target.focus();
+      hideMenu();
+      showMenu(target, [{ info: true, icon: '✓', title: '已填充 MFA 验证码', subtitle: '' }], '');
+      window.setTimeout(() => {
+        if (anchorField === target && menu && menu.style.display !== 'none') {
+          hideMenu();
+        }
+      }, 1200);
+      return true;
+    }
+    showMenu(
+      target,
+      [{ info: true, icon: '⚠', title: '填充失败', subtitle: '请手动粘贴验证码，并把此页面反馈给我们' }],
+      '',
+    );
+    window.setTimeout(() => {
+      if (menu && menu.style.display !== 'none') {
+        hideMenu();
+      }
+    }, 2500);
+    return false;
   };
 
   // ===== Inline dropdown menu =====
@@ -292,7 +325,7 @@
         info.className = 'cp-item cp-info';
         const avatar = document.createElement('span');
         avatar.className = 'cp-avatar';
-        avatar.textContent = '⏳';
+        avatar.textContent = entry.icon || '⏳';
         const text = document.createElement('span');
         text.className = 'cp-text';
         const title = document.createElement('div');
@@ -374,7 +407,7 @@
             const payload = await requestCredentials(true);
             const fresh = (payload?.items ?? []).find((entry) => entry.id === item?.id) ?? item;
             if (fresh?.totp_code) {
-              fillOtpCode(field, fresh.totp_code);
+              await fillOtpCode(field, fresh.totp_code);
             }
           },
         },
