@@ -1158,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "fly-password"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arboard",
  "argon2",

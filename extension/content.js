@@ -119,12 +119,20 @@
         forceFill(usernameField, item.username);
       }
     } else {
-      // Password-less username step: fill the focused or first visible username field.
-      const usernameField =
-        (document.activeElement && isUsernameCandidate(document.activeElement) && document.activeElement) ||
-        Array.from(document.querySelectorAll('input')).find((element) => isUsernameCandidate(element) && isVisible(element));
-      if (usernameField && item.username) {
-        filled = forceFill(usernameField, item.username);
+      // No password field on this step. If the focused field is an OTP box,
+      // fill the verification code; otherwise treat it as a username step.
+      const focused = document.activeElement;
+      if (focused && isOtpField(focused) && item.totp_code) {
+        filled = forceFill(focused, item.totp_code);
+      } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
+        filled = forceFill(focused, item.username ?? '');
+      } else {
+        const usernameField = Array.from(document.querySelectorAll('input')).find(
+          (element) => isUsernameCandidate(element) && !isOtpField(element) && isVisible(element) && !looksLikeSearchField(element),
+        );
+        if (usernameField && item.username) {
+          filled = forceFill(usernameField, item.username);
+        }
       }
     }
     if (filled) {
@@ -149,12 +157,14 @@
     return filled;
   };
 
-  const fillOtpCode = (code) => {
+  const fillOtpCode = (field, code) => {
     const target =
+      (field && isOtpField(field) && field) ||
       (document.activeElement && isOtpField(document.activeElement) && document.activeElement) ||
       Array.from(document.querySelectorAll('input')).find(isOtpField);
     if (!target) return false;
-    setNativeValue(target, code);
+    forceFill(target, code);
+    target.focus();
     hideMenu();
     return true;
   };
@@ -364,7 +374,7 @@
             const payload = await requestCredentials(true);
             const fresh = (payload?.items ?? []).find((entry) => entry.id === item?.id) ?? item;
             if (fresh?.totp_code) {
-              fillOtpCode(fresh.totp_code);
+              fillOtpCode(field, fresh.totp_code);
             }
           },
         },
