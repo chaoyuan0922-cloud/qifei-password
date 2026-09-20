@@ -141,7 +141,7 @@
         pendingOtpItem = item;
       }
       void runtimeSend({ type: 'markLastFilled', item });
-      const feedbackAnchor = anchorField || passwordField || usernameField || document.body;
+      const feedbackAnchor = anchorField || passwordField || document.activeElement || document.body;
       hideMenu();
       showMenu(
         feedbackAnchor,
