@@ -52,6 +52,94 @@ type Api = {
 };
 
 const demoItems: VaultItem[] = [];
+
+// Screenshot/demo seed: realistic-looking entries used when the app is
+// opened with ?seed=1 (browser preview only).
+const demoSeed: VaultItem[] = [
+  {
+    id: 'seed-1',
+    item_type: 'login',
+    title: '肯尼亚-生产-jumpserver',
+    username: 'zhangcy',
+    password: 'Jmp#2024Prod',
+    website: 'https://jumpserver.udatec.ai/',
+    websites: ['https://jumpserver.udatec.ai/'],
+    website_labels: ['网站'],
+    totp_secret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+    notes: '堡垒机生产环境入口，开启了虚拟 MFA。',
+    tags: ['肯尼亚', '生产'],
+    favorite: true,
+    created_at: '2026-09-10T08:00:00.000Z',
+    updated_at: '2026-09-18T10:00:00.000Z',
+  },
+  {
+    id: 'seed-2',
+    item_type: 'login',
+    title: '优数-生产-阿里云ram',
+    username: 'zhangcy@udataai.com',
+    password: 'AliRam!Secure88',
+    website: 'https://ram.console.aliyun.com',
+    websites: ['https://ram.console.aliyun.com'],
+    website_labels: ['控制台'],
+    totp_secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+    notes: '',
+    tags: ['优数', '生产'],
+    favorite: false,
+    created_at: '2026-09-11T09:00:00.000Z',
+    updated_at: '2026-09-17T15:30:00.000Z',
+  },
+  {
+    id: 'seed-3',
+    item_type: 'login',
+    title: '优数-AI-sub2api-admin',
+    username: 'admin',
+    password: 'Sub2Api#Admin77',
+    website: 'https://sub2api.local',
+    websites: ['https://sub2api.local'],
+    website_labels: ['后台'],
+    totp_secret: '',
+    notes: '内部 AI 网关管理后台。',
+    tags: ['优数', 'AI'],
+    favorite: false,
+    created_at: '2026-09-12T09:00:00.000Z',
+    updated_at: '2026-09-16T11:20:00.000Z',
+  },
+  {
+    id: 'seed-4',
+    item_type: 'login',
+    title: '优数-测试-AKSK',
+    username: 'LTAI5tA4YXeYQmDemo',
+    password: 'AkSk-Test-9931',
+    website: '',
+    websites: [''],
+    website_labels: ['网站'],
+    totp_secret: '',
+    notes: 'AccessKey 测试凭据，仅限测试环境使用。',
+    tags: ['优数', '测试'],
+    favorite: false,
+    created_at: '2026-09-13T09:00:00.000Z',
+    updated_at: '2026-09-15T09:00:00.000Z',
+  },
+  {
+    id: 'seed-5',
+    item_type: 'password',
+    title: 'WiFi 访客密码',
+    password: 'Guest-Wifi-2026',
+    notes: '办公室访客网络，每季度更换。',
+    tags: ['办公'],
+    favorite: false,
+    created_at: '2026-09-14T09:00:00.000Z',
+    updated_at: '2026-09-14T09:00:00.000Z',
+  },
+];
+
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('seed')) {
+  demoItems.push(...demoSeed);
+  localStorage.setItem(
+    'fly.browserVaultProfile',
+    JSON.stringify({ name: '归一', avatar: '归' }),
+  );
+}
 const browserVaultProfileStorageKey = 'fly.browserVaultProfile';
 
 const fallbackVaultProfile: VaultProfile = { name: '本地保险库', avatar: '本' };
