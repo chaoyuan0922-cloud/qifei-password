@@ -144,17 +144,21 @@ async function main() {
       await screenshot(page, 'password-generator.png');
     }
 
-    // --- quick search window ---
+    // --- quick search window (compact floating window, ~380px wide) ---
     await page.goto(`${DEV_URL}/?seed=1&window=quick-search`, { waitUntil: 'networkidle0' });
+    await page.setViewport({ width: 380, height: 190, deviceScaleFactor: 2 });
     await sleep(900);
     await screenshot(page, 'quick-search-empty.png');
 
     await type(page, '.quick-search-box input', 'jump');
     await sleep(700);
+    await page.setViewport({ width: 380, height: 250, deviceScaleFactor: 2 });
+    await sleep(200);
     const quickRows = await page.$$('.quick-result-row');
     await screenshot(page, 'quick-search-results.png');
     if (quickRows.length > 0) {
       await quickRows[0].click();
+      await page.setViewport({ width: 380, height: 470, deviceScaleFactor: 2 });
       await sleep(900);
       await screenshot(page, 'quick-search-detail.png');
     }
