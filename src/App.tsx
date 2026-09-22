@@ -216,12 +216,16 @@ const hideCurrentWindow = async () => {
 };
 
 const writeClipboard = async (value: string) => {
+  if (isTauri()) {
+    await api.copyText(value);
+    return;
+  }
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(value);
       return;
     } catch {
-      // Fall through to the native clipboard command.
+      // Fall through to the execCommand-based path for browser previews.
     }
   }
   await api.copyText(value);
@@ -1551,6 +1555,7 @@ function DetailPane({
 }) {
   const [revealed, setRevealed] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string>();
   const itemWebsites = item?.item_type === 'login' ? item.websites?.length ? item.websites : [item.website] : [];
   const itemWebsiteLabels =
     item?.item_type === 'login'
@@ -1585,8 +1590,20 @@ function DetailPane({
     );
   }
 
-  const copyValue = async (value: string) => {
-    await navigator.clipboard?.writeText(value);
+  const copyValue = async (value: string, key?: string) => {
+    try {
+      await writeClipboard(value);
+    } catch (err) {
+      console.warn('Copy failed', err);
+      return;
+    }
+    if (key) {
+      setCopiedKey(key);
+      window.setTimeout(
+        () => setCopiedKey((current) => (current === key ? undefined : current)),
+        1200,
+      );
+    }
   };
 
   return (
@@ -1627,12 +1644,18 @@ function DetailPane({
         {item.item_type === 'login' ? (
           <>
             <div className="credential-card">
-              <FieldLine label="用户名" value={item.username} actionLabel="复制" onAction={() => copyValue(item.username)} />
+              <FieldLine
+                label="用户名"
+                value={item.username}
+                actionLabel={copiedKey === 'username' ? '已复制' : '复制'}
+                onAction={() => void copyValue(item.username, 'username')}
+              />
               <SecretFieldLine
                 password={item.password}
                 revealed={revealed}
+                copied={copiedKey === 'password'}
                 onReveal={() => setRevealed((value) => !value)}
-                onCopy={() => copyValue(item.password)}
+                onCopy={() => void copyValue(item.password, 'password')}
               />
               {item.totp_secret?.trim().length > 0 && <TotpFieldLine itemId={item.id} />}
             </div>
@@ -1651,8 +1674,9 @@ function DetailPane({
               password={item.password}
               revealed={revealed}
               highlighted
+              copied={copiedKey === 'password'}
               onReveal={() => setRevealed((value) => !value)}
-              onCopy={() => copyValue(item.password)}
+              onCopy={() => void copyValue(item.password, 'password')}
             />
           </div>
         )}
@@ -1804,12 +1828,14 @@ function SecretFieldLine({
   password,
   revealed,
   highlighted,
+  copied,
   onReveal,
   onCopy,
 }: {
   password: string;
   revealed: boolean;
   highlighted?: boolean;
+  copied?: boolean;
   onReveal: () => void;
   onCopy: () => void;
 }) {
@@ -1826,7 +1852,7 @@ function SecretFieldLine({
           {revealed ? <EyeOff size={18} /> : <Eye size={18} />}
         </button>
         <button className="field-copy" onClick={onCopy}>
-          复制
+          {copied ? '已复制' : '复制'}
         </button>
       </div>
     </div>
@@ -1885,7 +1911,12 @@ function TotpFieldLine({ itemId }: { itemId: string }) {
   const formattedCode = `${totp.code.slice(0, 3)} ${totp.code.slice(3)}`;
 
   const copy = async () => {
-    await navigator.clipboard?.writeText(totp.code);
+    try {
+      await writeClipboard(totp.code);
+    } catch (err) {
+      console.warn('Copy failed', err);
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   };
@@ -2269,7 +2300,13 @@ function BrowserBridgeSettings() {
 
   const copyToken = async () => {
     if (!bridgeInfo) return;
-    await navigator.clipboard?.writeText(bridgeInfo.token);
+    try {
+      await writeClipboard(bridgeInfo.token);
+    } catch (err) {
+      console.warn('Copy failed', err);
+      setMessage(`复制失败：${String(err)}`);
+      return;
+    }
     setCopiedToken(true);
     window.setTimeout(() => setCopiedToken(false), 1200);
   };
