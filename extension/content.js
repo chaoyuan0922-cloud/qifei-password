@@ -393,6 +393,23 @@
     );
   };
 
+  // ===== Auto dropdown on matching login pages =====
+
+  let autoShownForPage = false;
+
+  const tryAutoShowMenu = async () => {
+    if (autoShownForPage) return;
+    const passwordField = findPasswordField();
+    if (!passwordField) return;
+    const payload = await requestCredentials();
+    if (payload?.status !== 'ok' || !payload.items?.length) return;
+    autoShownForPage = true;
+    const anchor = findUsernameField(passwordField) || passwordField;
+    showCredentialMenu(anchor, payload.items);
+  };
+
+  window.setTimeout(() => void tryAutoShowMenu(), 900);
+
   const showOtpMenu = (field, item) => {
     menuMode = 'otp';
     showMenu(
@@ -550,6 +567,7 @@
     if (mutationTimer) return;
     mutationTimer = window.setTimeout(() => {
       mutationTimer = null;
+      void tryAutoShowMenu();
       const active = document.activeElement;
       if (active instanceof HTMLElement && isVisible(active)) {
         void maybeShowForField(active);
