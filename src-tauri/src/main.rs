@@ -1140,6 +1140,11 @@ fn persist_bridge_info(info: &BridgeInfo) -> Result<(), String> {
     fs::write(bridge_file_path()?, content).map_err(|err| err.to_string())
 }
 
+fn read_persisted_bridge_info() -> Option<BridgeInfo> {
+    let content = fs::read_to_string(bridge_file_path().ok()?).ok()?;
+    serde_json::from_str::<BridgeInfo>(&content).ok()
+}
+
 fn read_allowed_bridge_origins(conn: &Connection) -> Result<Vec<String>, String> {
     let raw: Option<String> = conn
         .query_row(
@@ -1505,9 +1510,15 @@ fn start_bridge_server<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     // Managed unconditionally and as the plain value type (not Arc) so the
     // `tauri::State<BridgeShared>` command parameters can find it even when
     // no port could be bound.
+    // Reuse the previous token when present so the browser extension stays
+    // paired across app restarts; only an explicit regeneration rotates it.
+    let token = read_persisted_bridge_info()
+        .map(|info| info.token)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(random_bridge_token);
     app.manage(BridgeShared {
         info: Mutex::new(None),
-        token: Mutex::new(random_bridge_token()),
+        token: Mutex::new(token),
         announced: Mutex::new(HashMap::new()),
     });
 
