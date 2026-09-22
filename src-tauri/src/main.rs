@@ -1269,11 +1269,12 @@ fn collect_bridge_logins(
             continue;
         };
         let matches = {
-            let mut websites = details.websites.clone();
-            if websites.is_empty() && !details.website.trim().is_empty() {
-                websites.push(details.website.clone());
-            }
-            websites
+            // Always include the primary website: legacy entries may carry an
+            // empty placeholder row in `websites` while the real value lives
+            // in `website` (or vice versa after edits).
+            let mut candidates = details.websites.clone();
+            candidates.push(details.website.clone());
+            candidates
                 .iter()
                 .filter_map(|website| normalize_bridge_host(website))
                 .any(|host| bridge_hosts_match(&host, page_host))
