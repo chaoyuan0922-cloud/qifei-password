@@ -163,27 +163,68 @@
     return Array.from(document.querySelectorAll('input')).find(isOtpField) || null;
   };
 
+  const otpInputsInPage = () =>
+    Array.from(document.querySelectorAll('input')).filter((el) => isOtpField(el) && isVisible(el));
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Segmented OTP widgets (six single-digit boxes) need one digit per input.
+  const fillOtpSegmented = (digits) => {
+    const inputs = otpInputsInPage();
+    if (inputs.length < digits.length) return false;
+    const group = inputs.slice(0, digits.length);
+    let ok = true;
+    group.forEach((input, index) => {
+      if (!forceFill(input, digits[index])) ok = false;
+    });
+    return ok;
+  };
+
   const fillOtpCode = async (field, code) => {
+    const digits = code.replace(/\D/g, '');
     const locate = () => {
       if (field && field.isConnected && isOtpField(field)) return field;
       return queryOtpField();
     };
     let target = locate();
     if (!target) return false;
-    forceFill(target, code);
-    if (target.value !== code) {
-      // Frameworks may replace the node right after a click; wait for the
-      // fresh element and try again.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      target = locate() || target;
+
+    let succeeded = false;
+    for (let attempt = 0; attempt < 2 && !succeeded; attempt += 1) {
       forceFill(target, code);
+      await sleep(300);
+      target = locate() || target;
+      if (target.value === code) {
+        succeeded = true;
+        break;
+      }
+      // Truncated value (maxLength boxes) or a multi-box widget: distribute digits.
+      succeeded = fillOtpSegmented(digits);
     }
-    if (target.value === code) {
+    console.debug('[FlyPassword] OTP fill attempt', {
+      code,
+      singleValue: target.value,
+      otpInputs: otpInputsInPage().map((el) => ({
+        name: el.name,
+        id: el.id,
+        maxLength: el.maxLength,
+        value: el.value,
+      })),
+      succeeded,
+    });
+
+    const joined = otpInputsInPage()
+      .slice(0, digits.length)
+      .map((input) => input.value)
+      .join('');
+    succeeded = succeeded || joined === digits;
+
+    if (succeeded) {
       target.focus();
       hideMenu();
       showMenu(target, [{ info: true, icon: '✓', title: '已填充 MFA 验证码', subtitle: '' }], '');
       window.setTimeout(() => {
-        if (anchorField === target && menu && menu.style.display !== 'none') {
+        if (menu && menu.style.display !== 'none') {
           hideMenu();
         }
       }, 1200);
@@ -191,7 +232,7 @@
     }
     showMenu(
       target,
-      [{ info: true, icon: '⚠', title: '填充失败', subtitle: '请手动粘贴验证码，并把此页面反馈给我们' }],
+      [{ info: true, icon: '⚠', title: '填充失败', subtitle: '请按 F12 查看控制台 [FlyPassword] 诊断信息并反馈' }],
       '',
     );
     window.setTimeout(() => {
