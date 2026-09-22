@@ -16,12 +16,24 @@
 
   const runtimeSend = (message) =>
     new Promise((resolve) => {
+      let settled = false;
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: false, error: 'background timeout' });
+      }, 6000);
       try {
         chrome.runtime.sendMessage(message, (response) => {
           void chrome.runtime.lastError;
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
           resolve(response ?? { ok: false, error: 'no response' });
         });
       } catch (err) {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
         resolve({ ok: false, error: String(err) });
       }
     });
@@ -182,6 +194,7 @@
 
   const fillOtpCode = async (field, code) => {
     const digits = code.replace(/\D/g, '');
+    console.log('[FlyPassword] OTP fill start', { code, digits });
     const locate = () => {
       if (field && field.isConnected && isOtpField(field)) return field;
       return queryOtpField();
@@ -201,7 +214,7 @@
       // Truncated value (maxLength boxes) or a multi-box widget: distribute digits.
       succeeded = fillOtpSegmented(digits);
     }
-    console.debug('[FlyPassword] OTP fill attempt', {
+    console.log('[FlyPassword] OTP fill result', {
       code,
       singleValue: target.value,
       otpInputs: otpInputsInPage().map((el) => ({
@@ -461,12 +474,16 @@
           subtitle: item?.title ? `来自「${item.title}」` : '',
           badge: 'MFA',
           onPick: async () => {
-            // Re-fetch so the code is current rather than a cached snapshot.
-            const payload = await requestCredentials(true);
-            const fresh = (payload?.items ?? []).find((entry) => entry.id === item?.id) ?? item;
-            if (fresh?.totp_code) {
-              await fillOtpCode(field, fresh.totp_code);
+            console.log('[FlyPassword] OTP fill triggered', { itemId: item?.id, title: item?.title });
+            // Fill immediately from the cached code; refreshing through the
+            // background may be slow or unroutable, so it is best-effort only.
+            const code = item?.totp_code;
+            if (!code) {
+              showMenu(field, [{ info: true, icon: '⚠', title: '没有可用验证码', subtitle: '' }], '');
+              return;
             }
+            await fillOtpCode(field, code);
+            void requestCredentials(true).catch(() => {});
           },
         },
       ],
