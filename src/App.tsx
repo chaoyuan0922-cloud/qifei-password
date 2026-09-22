@@ -216,6 +216,14 @@ const hideCurrentWindow = async () => {
 };
 
 const writeClipboard = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through to the native clipboard command.
+    }
+  }
   await api.copyText(value);
 };
 
@@ -1183,7 +1191,7 @@ function QuickSearchWindow() {
 
   if (status !== 'unlocked') {
     return (
-      <section className={`quick-shell quick-locked ${isTauri() ? 'native-titlebar' : ''}`} data-tauri-drag-region="deep" onMouseDown={startWindowDrag}>
+      <section className={`quick-shell quick-locked ${isTauri() ? 'native-titlebar' : ''}`} onMouseDown={startWindowDrag}>
         <header className="quick-titlebar" />
         <div className="quick-locked-body">
           <div className="auth-mark quick-auth-mark">
@@ -1200,8 +1208,8 @@ function QuickSearchWindow() {
   }
 
   return (
-    <section className={`quick-shell ${isTauri() ? 'native-titlebar' : ''}`} data-tauri-drag-region="deep" onMouseDown={startWindowDrag} onKeyDown={handleQuickKeyDown}>
-      <header className="quick-titlebar">
+    <section className={`quick-shell ${isTauri() ? 'native-titlebar' : ''}`} onKeyDown={handleQuickKeyDown}>
+      <header className="quick-titlebar" data-tauri-drag-region onMouseDown={startWindowDrag}>
         <div className="quick-window-actions">
           <button className={`icon-button quick-pin-button ${pinned ? 'active' : ''}`} aria-label="钉住迷你查询" onClick={() => void togglePinned()}>
             {pinned ? <PinOff size={18} /> : <Pin size={18} />}
