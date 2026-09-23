@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v16';
-  console.log('[FlyPassword] 内容脚本已加载 · build v16');
+  window.__flyBuild = 'v17';
+  console.log('[FlyPassword] 内容脚本已加载 · build v17');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -71,6 +71,21 @@
       if (labels.some((label) => text.includes(label))) return el;
     }
     return null;
+  };
+
+  const submitFormFallback = (near) => {
+    const form = near?.form || (near && near.closest && near.closest('form')) || document.querySelector('form');
+    if (!form) return false;
+    try {
+      if (typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+        return true;
+      }
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const isUsernameCandidate = (element) => {
@@ -172,7 +187,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v16',
+          '由起飞密码箱填充 · v17',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -206,7 +221,13 @@
         window.setTimeout(() => {
           console.log('[FlyPassword] 自动点击按钮', autoStep.textContent || autoStep.value || autoStep.type);
           autoStep.click();
-        }, 500);
+        }, 800);
+      } else if (!hadCaptcha) {
+        window.setTimeout(() => {
+          const anchor = passwordField || document.activeElement;
+          const submitted = submitFormFallback(anchor);
+          console.log('[FlyPassword] 按钮未找到，回退表单提交', submitted);
+        }, 800);
       }
       window.setTimeout(() => {
         if (anchorField === feedbackAnchor && menu && menu.style.display !== 'none') {
@@ -296,8 +317,11 @@
           if (confirm) {
             console.log('[FlyPassword] 自动点击确认按钮', confirm.textContent || confirm.value || confirm.type);
             confirm.click();
+          } else {
+            const submitted = submitFormFallback(target);
+            console.log('[FlyPassword] 确认按钮未找到，回退表单提交', submitted);
           }
-        }, 500);
+        }, 700);
       }
       window.setTimeout(() => {
         if (menu && menu.style.display !== 'none') {
@@ -514,7 +538,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v16',
+      '由起飞密码箱填充 · v17',
     );
   };
 
@@ -558,7 +582,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v16',
+      '由起飞密码箱填充 · v17',
     );
   };
 
@@ -742,7 +766,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v16',
+        '由起飞密码箱填充 · v17',
       );
     }
   };
