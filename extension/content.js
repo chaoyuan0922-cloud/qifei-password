@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v13';
-  console.log('[FlyPassword] 内容脚本已加载 · build v13');
+  window.__flyBuild = 'v14';
+  console.log('[FlyPassword] 内容脚本已加载 · build v14');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -51,6 +51,27 @@
   };
 
   const fieldKey = (element) => (element ? `${element.name || ''}|${element.id || ''}|${element.type || ''}` : '');
+
+  const LOGIN_LABELS = ['登录', '登 录', 'sign in', 'log in', 'signin', 'login', '进入', '下一步', '继续'];
+  const CONFIRM_LABELS = ['确认', '确定', '验证', '提交', '下一步', '继续', 'verify', 'submit', 'continue', 'confirm', 'next'];
+
+  const hasCaptchaInput = () =>
+    Array.from(document.querySelectorAll('input')).some(
+      (el) => isVisible(el) && !isOtpField(el) && /captcha|验证码|图片码/i.test(`${el.name || ''} ${el.id || ''} ${el.placeholder || ''}`),
+    );
+
+  const findSubmitButton = (near, labels) => {
+    const candidates = Array.from(
+      document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'),
+    ).filter((el) => isVisible(el));
+    const byType = candidates.find((el) => el.type === 'submit');
+    if (byType) return byType;
+    for (const el of candidates) {
+      const text = `${el.textContent || ''} ${el.value || ''}`.trim().toLowerCase();
+      if (labels.some((label) => text.includes(label))) return el;
+    }
+    return null;
+  };
 
   const isUsernameCandidate = (element) => {
     if (!(element instanceof HTMLInputElement)) return false;
@@ -151,7 +172,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v13',
+          '由起飞密码箱填充 · v14',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -172,11 +193,21 @@
       void runtimeSend({ type: 'markLastFilled', item });
       const feedbackAnchor = anchorField || passwordField || document.activeElement || document.body;
       hideMenu();
+      const hadCaptcha = hasCaptchaInput();
       showMenu(
         feedbackAnchor,
-        [{ info: true, icon: '✓', title: '已填充', subtitle: item.title || '' }],
+        [{ info: true, icon: '✓', title: hadCaptcha ? '已填充' : '已填充，正在自动登录…', subtitle: item.title || '' }],
         '',
       );
+      if (!hadCaptcha && passwordField) {
+        window.setTimeout(() => {
+          const submit = findSubmitButton(passwordField, LOGIN_LABELS);
+          if (submit) {
+            console.log('[FlyPassword] 自动点击登录按钮', submit.textContent || submit.value || submit.type);
+            submit.click();
+          }
+        }, 500);
+      }
       window.setTimeout(() => {
         if (anchorField === feedbackAnchor && menu && menu.style.display !== 'none') {
           hideMenu();
@@ -209,7 +240,7 @@
     return ok;
   };
 
-  const fillOtpCode = async (field, code) => {
+  const fillOtpCode = async (field, code, remainingSeconds) => {
     const digits = code.replace(/\D/g, '');
     console.log('[FlyPassword] OTP fill start', { code, digits });
     const locate = () => {
@@ -252,7 +283,22 @@
     if (succeeded) {
       target.focus();
       hideMenu();
-      showMenu(target, [{ info: true, icon: '✓', title: '已填充 MFA 验证码', subtitle: '' }], '');
+      const freshEnough = remainingSeconds === undefined || remainingSeconds > 8;
+      const canAutoConfirm = freshEnough && !hasCaptchaInput();
+      showMenu(
+        target,
+        [{ info: true, icon: '✓', title: canAutoConfirm ? '已填充，正在自动确认…' : '已填充 MFA 验证码', subtitle: canAutoConfirm ? '' : '验证码即将过期，请稍后手动确认' }],
+        '',
+      );
+      if (canAutoConfirm) {
+        window.setTimeout(() => {
+          const confirm = findSubmitButton(target, CONFIRM_LABELS);
+          if (confirm) {
+            console.log('[FlyPassword] 自动点击确认按钮', confirm.textContent || confirm.value || confirm.type);
+            confirm.click();
+          }
+        }, 500);
+      }
       window.setTimeout(() => {
         if (menu && menu.style.display !== 'none') {
           hideMenu();
@@ -468,7 +514,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v13',
+      '由起飞密码箱填充 · v14',
     );
   };
 
@@ -507,12 +553,12 @@
               showMenu(field, [{ info: true, icon: '⚠', title: '没有可用验证码', subtitle: '' }], '');
               return;
             }
-            await fillOtpCode(field, code);
+            await fillOtpCode(field, code, item?.totp_remaining_seconds);
             void requestCredentials(true).catch(() => {});
           },
         },
       ],
-      '由起飞密码箱填充 · v13',
+      '由起飞密码箱填充 · v14',
     );
   };
 
@@ -627,7 +673,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v13',
+        '由起飞密码箱填充 · v14',
       );
     }
   };
