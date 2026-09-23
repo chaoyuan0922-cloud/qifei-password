@@ -6,7 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  console.log('[FlyPassword] 内容脚本已加载 · build v11');
+  window.__flyBuild = 'v12';
+  console.log('[FlyPassword] 内容脚本已加载 · build v12');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -416,11 +417,18 @@
         badge.textContent = entry.badge;
         button.appendChild(badge);
       }
-      button.addEventListener('click', (event) => {
+      let pressed = false;
+      const firePick = (event) => {
         event.preventDefault();
+        event.stopPropagation();
+        if (pressed) return;
+        pressed = true;
         console.log('[FlyPassword] 菜单项被点击：', entry.title || entry.subtitle || entry.username || '');
         entry.onPick();
-      });
+      };
+      // pointerdown fires even when the page swallows click events.
+      button.addEventListener('pointerdown', firePick);
+      button.addEventListener('click', firePick);
       menu.appendChild(button);
     }
     if (footerText) {
@@ -445,7 +453,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v11',
+      '由起飞密码箱填充 · v12',
     );
   };
 
@@ -489,7 +497,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v11',
+      '由起飞密码箱填充 · v12',
     );
   };
 
@@ -592,7 +600,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v11',
+        '由起飞密码箱填充 · v12',
       );
     }
   };
