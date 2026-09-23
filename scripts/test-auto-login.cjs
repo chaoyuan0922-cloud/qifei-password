@@ -1,7 +1,8 @@
 // End-to-end verification of the REAL content.js auto-login flow.
-// Runs a three-step wizard (username -> password -> MFA) with a stubbed
-// chrome.runtime and asserts that a SINGLE menu pick fills every step and
-// clicks every continue button without further interaction.
+// Three scenarios, each proving the flow needs exactly ONE menu pick:
+//   A) wizard WITH MFA   username -> next -> password -> next -> OTP -> confirm
+//   B) wizard WITHOUT MFA  username -> next -> password -> login
+//   C) single form WITHOUT MFA  username+password -> login
 // Usage: node scripts/test-auto-login.cjs
 
 const fs = require('fs');
@@ -26,10 +27,7 @@ function findChrome() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const WIZARD_HTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8" /><title>三步登录向导测试</title></head>
-<body>
+const WIZARD_MFA_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/></head><body>
   <div id="step1">
     <input id="username" name="accountName" type="text" placeholder="请输入账号" autocomplete="username" />
     <button id="next1" type="button">下一步</button>
@@ -44,7 +42,7 @@ const WIZARD_HTML = `<!DOCTYPE html>
   </div>
   <script>
     window.__wizard = { next1: 0, next2: 0, login: 0, loggedIn: false };
-    const show = (id) => { ['step1','step2','step3'].forEach((s) => { document.getElementById(s).style.display = s === id ? '' : 'none'; }); };
+    const show = (id) => ['step1','step2','step3'].forEach((s) => { document.getElementById(s).style.display = s === id ? '' : 'none'; });
     document.getElementById('next1').addEventListener('click', () => {
       if (!document.getElementById('username').value) return;
       window.__wizard.next1 += 1; show('step2');
@@ -58,8 +56,45 @@ const WIZARD_HTML = `<!DOCTYPE html>
       window.__wizard.login += 1; window.__wizard.loggedIn = true;
     });
   </script>
-</body>
-</html>`;
+</body></html>`;
+
+const WIZARD_NO_MFA_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/></head><body>
+  <div id="step1">
+    <input id="username" name="accountName" type="text" placeholder="请输入账号" autocomplete="username" />
+    <button id="next1" type="button">下一步</button>
+  </div>
+  <div id="step2" style="display:none">
+    <input id="password" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+    <button id="loginBtn" type="button">登录</button>
+  </div>
+  <script>
+    window.__wizard = { next1: 0, login: 0, loggedIn: false };
+    const show = (id) => ['step1','step2'].forEach((s) => { document.getElementById(s).style.display = s === id ? '' : 'none'; });
+    document.getElementById('next1').addEventListener('click', () => {
+      if (!document.getElementById('username').value) return;
+      window.__wizard.next1 += 1; show('step2');
+    });
+    document.getElementById('loginBtn').addEventListener('click', () => {
+      if (!document.getElementById('password').value) return;
+      window.__wizard.login += 1; window.__wizard.loggedIn = true;
+    });
+  </script>
+</body></html>`;
+
+const SINGLE_FORM_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/></head><body>
+  <form id="loginForm">
+    <input id="username" name="accountName" type="text" placeholder="请输入账号" autocomplete="username" />
+    <input id="password" name="password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+    <button id="loginBtn" type="button">登录</button>
+  </form>
+  <script>
+    window.__wizard = { login: 0, loggedIn: false };
+    document.getElementById('loginBtn').addEventListener('click', () => {
+      if (!document.getElementById('username').value || !document.getElementById('password').value) return;
+      window.__wizard.login += 1; window.__wizard.loggedIn = true;
+    });
+  </script>
+</body></html>`;
 
 const CHROME_STUB = `
   window.chrome = {
@@ -68,20 +103,7 @@ const CHROME_STUB = `
       sendMessage: (message, callback) => {
         let response = { ok: true };
         if (message && message.type === 'getCredentials') {
-          response = {
-            ok: true,
-            payload: {
-              status: 'ok',
-              items: [{
-                id: 'test-1',
-                title: '测试账号',
-                username: 'zhangcy',
-                password: 'Secret!123',
-                totp_code: '123456',
-                totp_remaining_seconds: 20,
-              }],
-            },
-          };
+          response = { ok: true, payload: { status: 'ok', items: [window.__testItem] } };
         }
         setTimeout(() => callback(response), 0);
       },
@@ -90,12 +112,59 @@ const CHROME_STUB = `
   };
 `;
 
+const withOtps = (count) => ({ totp_code: count ? '123456' : null, totp_remaining_seconds: count ? 20 : null });
+const baseItem = () => ({ id: 'test-1', title: '测试账号', username: 'zhangcy', password: 'Secret!123' });
+
+async function runScenario(browser, route, html, item, verify, shouldHaveMfa) {
+  const page = await browser.newPage();
+  const logs = [];
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (text.includes('[FlyPassword]')) logs.push(text);
+  });
+  page.on('pageerror', (err) => logs.push(`[PAGEERROR] ${err.message}`));
+  await page.goto(`http://127.0.0.1:8977${route}`, { waitUntil: 'networkidle0' });
+  await page.evaluate(CHROME_STUB);
+  await page.evaluate((item) => {
+    window.__testItem = item;
+  }, item);
+  await page.evaluate(CONTENT_JS);
+
+  // Single pick via the real shadow-DOM menu (pointerdown path).
+  await page.focus('#username');
+  await sleep(700);
+  await sleep(400);
+  const hit = await page.evaluate(() => {
+    const host = document.getElementById('fly-password-fill-host');
+    if (!host) return null;
+    return {
+      x: parseFloat(host.style.left || '0') + 40,
+      y: parseFloat(host.style.top || '0') + 26,
+    };
+  });
+  if (!hit) {
+    await page.close();
+    return { page, ok: false, logs, reason: 'menu never appeared' };
+  }
+  await page.mouse.click(hit.x, hit.y);
+
+  let ok = false;
+  try {
+    ok = await page.waitForFunction(verify, { timeout: 10000 });
+  } catch {
+    ok = false;
+  }
+  const state = await page.evaluate(() => JSON.parse(JSON.stringify(window.__wizard)));
+  await page.close();
+  return { page: null, ok, logs, state, reason: ok ? '' : `verify failed: ${state ? JSON.stringify(state) : 'n/a'}` };
+}
+
 async function main() {
-  // Serve over real HTTP: sessionStorage is unavailable on opaque origins
-  // (about:blank), which is what previously kept the auto plan from arming.
   const server = http.createServer((req, res) => {
+    const html =
+      req.url === '/no-mfa' ? WIZARD_NO_MFA_HTML : req.url === '/single' ? SINGLE_FORM_HTML : WIZARD_MFA_HTML;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(WIZARD_HTML);
+    res.end(html);
   });
   await new Promise((resolve) => server.listen(8977, '127.0.0.1', resolve));
 
@@ -105,73 +174,62 @@ async function main() {
     args: ['--no-sandbox', '--disable-gpu', '--lang=zh-CN'],
     defaultViewport: { width: 900, height: 700 },
   });
-  const page = await browser.newPage();
-  const pageLogs = [];
-  page.on('console', (msg) => {
-    const text = msg.text();
-    if (text.includes('[FlyPassword]') || text.includes('[测试]')) pageLogs.push(text);
+
+  const results = {};
+  const allLogs = {};
+
+  // A) wizard with MFA
+  {
+    const r = await runScenario(
+      browser,
+      '/',
+      WIZARD_MFA_HTML,
+      { ...baseItem(), ...withOtps(1) },
+      `window.__wizard.loggedIn === true && document.getElementById('otp').value === '123456'`,
+    );
+    results.A_wizard_with_mfa = r.ok;
+    allLogs.A = r.logs;
+    if (!r.ok) console.log('[A] FAIL', r.reason);
+  }
+
+  // B) wizard without MFA: password step must end with auto login
+  {
+    const r = await runScenario(
+      browser,
+      '/no-mfa',
+      WIZARD_NO_MFA_HTML,
+      { ...baseItem(), ...withOtps(0) },
+      `window.__wizard.loggedIn === true && document.getElementById('password').value === 'Secret!123'`,
+    );
+    results.B_wizard_no_mfa = r.ok;
+    allLogs.B = r.logs;
+    if (!r.ok) console.log('[B] FAIL', r.reason);
+  }
+
+  // C) single form without MFA
+  {
+    const r = await runScenario(
+      browser,
+      '/single',
+      SINGLE_FORM_HTML,
+      { ...baseItem(), ...withOtps(0) },
+      `window.__wizard.loggedIn === true && document.getElementById('username').value === 'zhangcy' && document.getElementById('password').value === 'Secret!123'`,
+    );
+    results.C_single_form_no_mfa = r.ok;
+    allLogs.C = r.logs;
+    if (!r.ok) console.log('[C] FAIL', r.reason);
+  }
+
+  console.log('\n=== 验收结果（全站三场景，一次点击全程自动） ===');
+  let pass = true;
+  Object.entries(results).forEach(([name, ok]) => {
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
+    if (!ok) pass = false;
   });
-  page.on('pageerror', (err) => pageLogs.push(`[PAGEERROR] ${err.message}`));
-  await page.goto('http://127.0.0.1:8977/', { waitUntil: 'networkidle0' });
-  // Install the chrome.runtime stub in the same world the content script runs
-  // in (main world), then inject the real content.js.
-  await page.evaluate(CHROME_STUB);
-  await page.evaluate(CONTENT_JS);
-
-  const checks = {};
-
-  // Step 1: focus username -> menu appears -> click the menu item.
-  await page.focus('#username');
-  await sleep(700);
-  const menuShown = await page.evaluate(() => {
-    const host = document.getElementById('fly-password-fill-host');
-    if (!host) return false;
-    return host.style.top !== '' && host.style.left !== '';
-  });
-  checks.menuShown = menuShown;
-
-  const hit = await page.evaluate(() => {
-    const host = document.getElementById('fly-password-fill-host');
-    return {
-      x: parseFloat(host.style.left || '0') + 40,
-      y: parseFloat(host.style.top || '0') + 26,
-    };
-  });
-
-  // Wait a moment so the (async stub) payload resolves and the menu renders.
-  await sleep(400);
-  await page.mouse.click(hit.x, hit.y);
-  console.log('[测试] 已点击菜单项 @', hit);
-
-  const step1Ok = await page.evaluate(() => {
-    const username = document.getElementById('username').value;
-    return username === 'zhangcy';
-  });
-  checks.usernameFilled = step1Ok;
-
-  // Step 2 auto: password fill + next2 click by the watcher.
-  const step2Ok = await page.waitForFunction(
-    () => window.__wizard.next2 >= 1 && document.getElementById('password').value === 'Secret!123',
-    { timeout: 10000 },
-  ).then(() => true).catch(() => false);
-  checks.passwordFilledAndAdvanced = step2Ok;
-
-  // Step 3 auto: OTP fill + login click by the watcher.
-  const step3Ok = await page.waitForFunction(
-    () => window.__wizard.loggedIn === true && document.getElementById('otp').value === '123456',
-    { timeout: 10000 },
-  ).then(() => true).catch(() => false);
-  checks.mfaFilledAndLoggedIn = step3Ok;
-
-  await sleep(300);
-  const wizardState = await page.evaluate(() => JSON.parse(JSON.stringify(window.__wizard)));
-  console.log('[测试] 向导状态', JSON.stringify(wizardState));
-  console.log('[测试] 页面日志');
-  pageLogs.forEach((line) => console.log('   ', line));
-
-  const pass = Object.values(checks).every(Boolean);
-  console.log('\n=== 验收结果 ===');
-  Object.entries(checks).forEach(([name, ok]) => console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${ok}`));
+  for (const key of ['A', 'B', 'C']) {
+    console.log(`\n--- 场景 ${key} 日志 ---`);
+    (allLogs[key] || []).forEach((line) => console.log('   ', line));
+  }
   console.log(pass ? '=== ALL PASS ===' : '=== TEST FAILED ===');
   await browser.close();
   server.close();

@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v18';
-  console.log('[FlyPassword] 内容脚本已加载 · build v18');
+  window.__flyBuild = 'v19';
+  console.log('[FlyPassword] 内容脚本已加载 · build v19');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -61,12 +61,19 @@
     );
 
   const findSubmitButton = (near, labels) => {
-    const candidates = Array.from(
+    const visible = Array.from(
       document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'),
     ).filter((el) => isVisible(el));
-    const byType = candidates.find((el) => el.type === 'submit');
+    // Prefer buttons of the anchor's own form so unrelated page forms are
+    // never clicked by mistake.
+    const anchorForm = near?.form || (near && near.closest && near.closest('form'));
+    const inForm = anchorForm
+      ? visible.filter((el) => el.form === anchorForm || (el.closest && el.closest('form') === anchorForm))
+      : [];
+    const pool = inForm.length > 0 ? inForm : visible;
+    const byType = pool.find((el) => el.type === 'submit');
     if (byType) return byType;
-    for (const el of candidates) {
+    for (const el of pool) {
       const text = `${el.textContent || ''} ${el.value || ''}`.trim().toLowerCase();
       if (labels.some((label) => text.includes(label))) return el;
     }
@@ -187,7 +194,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v18',
+          '由起飞密码箱填充 · v19',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -204,6 +211,10 @@
       lastFilledItem = item;
       if (item.totp_code) {
         pendingOtpItem = item;
+      }
+      // Wizard steps without a visible password field keep running
+      // automatically whether or not the entry has MFA.
+      if (!passwordField) {
         setAutoMfaPlan(item.id);
       }
       void runtimeSend({ type: 'markLastFilled', item });
@@ -538,7 +549,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v18',
+      '由起飞密码箱填充 · v19',
     );
   };
 
@@ -582,7 +593,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v18',
+      '由起飞密码箱填充 · v19',
     );
   };
 
@@ -692,9 +703,10 @@
       if (passwordField.value !== (item.password ?? '')) {
         forceFill(passwordField, item.password ?? '');
       }
-      const now = Date.now();
-      if (now - (plan.lastAdvance || 0) > 8000) {
-        saveAutoPlan({ ...plan, lastAdvance: now });
+      // Advance exactly once: a wrong password must not trigger repeated
+      // submit attempts against the site.
+      if (!plan.advanceDone) {
+        saveAutoPlan({ ...plan, advanceDone: true });
         window.setTimeout(() => {
           const button = findSubmitButton(passwordField, LOGIN_LABELS);
           if (button) {
@@ -816,7 +828,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v18',
+        '由起飞密码箱填充 · v19',
       );
     }
   };
