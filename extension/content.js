@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v15';
-  console.log('[FlyPassword] 内容脚本已加载 · build v15');
+  window.__flyBuild = 'v16';
+  console.log('[FlyPassword] 内容脚本已加载 · build v16');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -172,7 +172,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v15',
+          '由起飞密码箱填充 · v16',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -189,28 +189,23 @@
       lastFilledItem = item;
       if (item.totp_code) {
         pendingOtpItem = item;
+        setAutoMfaPlan(item.id);
       }
       void runtimeSend({ type: 'markLastFilled', item });
       const feedbackAnchor = anchorField || passwordField || document.activeElement || document.body;
       hideMenu();
       const hadCaptcha = hasCaptchaInput();
+      const autoLabels = passwordField ? LOGIN_LABELS : ['下一步', '继续', 'next', 'continue'];
+      const autoStep = !hadCaptcha ? findSubmitButton(passwordField || document.activeElement, autoLabels) : null;
       showMenu(
         feedbackAnchor,
-        [{ info: true, icon: '✓', title: hadCaptcha ? '已填充' : '已填充，正在自动登录…', subtitle: item.title || '' }],
+        [{ info: true, icon: '✓', title: autoStep ? '已填充，自动继续…' : '已填充', subtitle: item.title || '' }],
         '',
       );
-      if (!hadCaptcha && passwordField) {
-        if (item.totp_code) {
-          // Arm the auto MFA completion for this tab; the plan survives the
-          // full-page navigation to the MFA step.
-          setAutoMfaPlan(item.id);
-        }
+      if (autoStep) {
         window.setTimeout(() => {
-          const submit = findSubmitButton(passwordField, LOGIN_LABELS);
-          if (submit) {
-            console.log('[FlyPassword] 自动点击登录按钮', submit.textContent || submit.value || submit.type);
-            submit.click();
-          }
+          console.log('[FlyPassword] 自动点击按钮', autoStep.textContent || autoStep.value || autoStep.type);
+          autoStep.click();
         }, 500);
       }
       window.setTimeout(() => {
@@ -519,7 +514,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v15',
+      '由起飞密码箱填充 · v16',
     );
   };
 
@@ -563,7 +558,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v15',
+      '由起飞密码箱填充 · v16',
     );
   };
 
@@ -747,7 +742,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v15',
+        '由起飞密码箱填充 · v16',
       );
     }
   };
