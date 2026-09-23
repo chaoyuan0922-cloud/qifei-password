@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v14';
-  console.log('[FlyPassword] 内容脚本已加载 · build v14');
+  window.__flyBuild = 'v15';
+  console.log('[FlyPassword] 内容脚本已加载 · build v15');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -172,7 +172,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v14',
+          '由起飞密码箱填充 · v15',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -200,6 +200,11 @@
         '',
       );
       if (!hadCaptcha && passwordField) {
+        if (item.totp_code) {
+          // Arm the auto MFA completion for this tab; the plan survives the
+          // full-page navigation to the MFA step.
+          setAutoMfaPlan(item.id);
+        }
         window.setTimeout(() => {
           const submit = findSubmitButton(passwordField, LOGIN_LABELS);
           if (submit) {
@@ -514,7 +519,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v14',
+      '由起飞密码箱填充 · v15',
     );
   };
 
@@ -558,7 +563,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v14',
+      '由起飞密码箱填充 · v15',
     );
   };
 
@@ -591,6 +596,75 @@
       return response?.payload ?? null;
     });
     return credentialsCache.promise;
+  };
+
+  const AUTO_MFA_KEY = '__flyAutoMfa';
+
+  const setAutoMfaPlan = (itemId) => {
+    try {
+      sessionStorage.setItem(AUTO_MFA_KEY, JSON.stringify({ itemId, at: Date.now() }));
+    } catch {
+      /* storage unavailable: skip auto MFA */
+    }
+  };
+
+  const clearAutoMfaPlan = () => {
+    try {
+      sessionStorage.removeItem(AUTO_MFA_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Completes the MFA step without user interaction when a login fill
+  // armed an auto plan for this tab (survives full-page navigation).
+  const runAutoMfa = async () => {
+    let plan = null;
+    try {
+      const raw = sessionStorage.getItem(AUTO_MFA_KEY);
+      if (!raw) return true;
+      plan = JSON.parse(raw);
+    } catch {
+      clearAutoMfaPlan();
+      return true;
+    }
+    if (!plan?.itemId || Date.now() - (plan.at || 0) > 60_000) {
+      clearAutoMfaPlan();
+      return true;
+    }
+    if (!plan.itemId) return true;
+    const otpField = queryOtpField();
+    if (!otpField) return false;
+    const payload = await requestCredentials(true).catch(() => null);
+    const item =
+      (payload?.items ?? []).find((entry) => entry.id === plan.itemId) ??
+      (payload?.items ?? []).find((entry) => entry.totp_code);
+    if (!item?.totp_code) {
+      clearAutoMfaPlan();
+      return true;
+    }
+    clearAutoMfaPlan();
+    console.log('[FlyPassword] 自动完成 MFA 步骤', item.title);
+    await fillOtpCode(otpField, item.totp_code, item.totp_remaining_seconds);
+    return true;
+  };
+
+  const ariaStartAutoMfa = () => {
+    let started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      let tries = 0;
+      const timer = window.setInterval(async () => {
+        tries += 1;
+        const done = await runAutoMfa();
+        if (done || tries > 45) {
+          window.clearInterval(timer);
+        }
+      }, 700);
+    };
+    void runAutoMfa();
+    window.setTimeout(start, 1500);
   };
 
   const maybeShowForField = async (field) => {
@@ -673,7 +747,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v14',
+        '由起飞密码箱填充 · v15',
       );
     }
   };
@@ -722,6 +796,7 @@
     }, 400);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  ariaStartAutoMfa();
 
   // Messages from the popup / background.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
