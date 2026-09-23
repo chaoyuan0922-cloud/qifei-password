@@ -6,8 +6,8 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v17';
-  console.log('[FlyPassword] 内容脚本已加载 · build v17');
+  window.__flyBuild = 'v18';
+  console.log('[FlyPassword] 内容脚本已加载 · build v18');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -187,7 +187,7 @@
               subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
             },
           ],
-          '由起飞密码箱填充 · v17',
+          '由起飞密码箱填充 · v18',
         );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
@@ -538,7 +538,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v17',
+      '由起飞密码箱填充 · v18',
     );
   };
 
@@ -582,7 +582,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v17',
+      '由起飞密码箱填充 · v18',
     );
   };
 
@@ -619,11 +619,29 @@
 
   const AUTO_MFA_KEY = '__flyAutoMfa';
 
+  const readAutoPlan = () => {
+    try {
+      const raw = sessionStorage.getItem(AUTO_MFA_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
   const setAutoMfaPlan = (itemId) => {
     try {
-      sessionStorage.setItem(AUTO_MFA_KEY, JSON.stringify({ itemId, at: Date.now() }));
+      sessionStorage.setItem(AUTO_MFA_KEY, JSON.stringify({ itemId, at: Date.now(), lastAdvance: 0 }));
     } catch {
-      /* storage unavailable: skip auto MFA */
+      /* storage unavailable: skip auto flow */
+    }
+  };
+
+  const saveAutoPlan = (plan) => {
+    try {
+      sessionStorage.setItem(AUTO_MFA_KEY, JSON.stringify(plan));
+    } catch {
+      /* ignore */
     }
   };
 
@@ -635,37 +653,63 @@
     }
   };
 
-  // Completes the MFA step without user interaction when a login fill
-  // armed an auto plan for this tab (survives full-page navigation).
+  // Completes the remaining wizard steps (password fill + advance, MFA fill
+  // + confirm) without further interaction once a login fill armed a plan
+  // for this tab. The plan survives full-page navigation via sessionStorage.
   const runAutoMfa = async () => {
-    let plan = null;
-    try {
-      const raw = sessionStorage.getItem(AUTO_MFA_KEY);
-      if (!raw) return true;
-      plan = JSON.parse(raw);
-    } catch {
-      clearAutoMfaPlan();
-      return true;
-    }
+    const plan = readAutoPlan();
     if (!plan?.itemId || Date.now() - (plan.at || 0) > 60_000) {
       clearAutoMfaPlan();
       return true;
     }
-    if (!plan.itemId) return true;
-    const otpField = queryOtpField();
-    if (!otpField) return false;
     const payload = await requestCredentials(true).catch(() => null);
     const item =
       (payload?.items ?? []).find((entry) => entry.id === plan.itemId) ??
       (payload?.items ?? []).find((entry) => entry.totp_code);
-    if (!item?.totp_code) {
+    if (!item) {
       clearAutoMfaPlan();
       return true;
     }
-    clearAutoMfaPlan();
-    console.log('[FlyPassword] 自动完成 MFA 步骤', item.title);
-    await fillOtpCode(otpField, item.totp_code, item.totp_remaining_seconds);
-    return true;
+
+    const otpField = queryOtpField();
+    if (otpField) {
+      if (!item.totp_code) {
+        clearAutoMfaPlan();
+        return true;
+      }
+      clearAutoMfaPlan();
+      console.log('[FlyPassword] 自动完成 MFA 步骤', item.title);
+      await fillOtpCode(otpField, item.totp_code, item.totp_remaining_seconds);
+      return true;
+    }
+
+    const passwordField = findPasswordField();
+    if (passwordField) {
+      const usernameField = findUsernameField(passwordField);
+      if (usernameField && usernameField.value !== (item.username ?? '')) {
+        forceFill(usernameField, item.username ?? '');
+      }
+      if (passwordField.value !== (item.password ?? '')) {
+        forceFill(passwordField, item.password ?? '');
+      }
+      const now = Date.now();
+      if (now - (plan.lastAdvance || 0) > 8000) {
+        saveAutoPlan({ ...plan, lastAdvance: now });
+        window.setTimeout(() => {
+          const button = findSubmitButton(passwordField, LOGIN_LABELS);
+          if (button) {
+            console.log('[FlyPassword] 自动推进密码步', button.textContent || button.value || button.type);
+            button.click();
+          } else {
+            const submitted = submitFormFallback(passwordField);
+            console.log('[FlyPassword] 密码步未找到按钮，回退表单提交', submitted);
+          }
+        }, 400);
+      }
+      return false;
+    }
+    // Neither OTP nor password field rendered yet; keep watching.
+    return false;
   };
 
   const ariaStartAutoMfa = () => {
@@ -674,12 +718,18 @@
       if (started) return;
       started = true;
       let tries = 0;
-      const timer = window.setInterval(async () => {
+      const timer = window.setInterval(() => {
         tries += 1;
-        const done = await runAutoMfa();
-        if (done || tries > 45) {
-          window.clearInterval(timer);
-        }
+        void runAutoMfa()
+          .then((done) => {
+            if (done || tries > 90) {
+              window.clearInterval(timer);
+            }
+          })
+          .catch((err) => {
+            console.log('[FlyPassword] auto-plan error', String(err));
+            if (tries > 90) window.clearInterval(timer);
+          });
       }, 700);
     };
     void runAutoMfa();
@@ -766,7 +816,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v17',
+        '由起飞密码箱填充 · v18',
       );
     }
   };
