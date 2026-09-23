@@ -6,10 +6,10 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
-  window.__flyBuild = 'v12';
-  console.log('[FlyPassword] 内容脚本已加载 · build v12');
+  window.__flyBuild = 'v13';
+  console.log('[FlyPassword] 内容脚本已加载 · build v13');
 
-  const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic)/i;
+  const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic|验证码|动态码|口令|安全码|校验码)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
 
   let credentialsCache = { origin: '', fetchedAt: 0, payload: null, promise: null };
@@ -138,6 +138,21 @@
       const focused = document.activeElement;
       if (focused && isOtpField(focused) && item.totp_code) {
         filled = forceFill(focused, item.totp_code);
+      } else if (otpInputsInPage().length > 0) {
+        // The page has verification-code inputs: never pour a username
+        // into them. Delegate code-filling to the OTP menu instead.
+        showMenu(
+          focused || document.body,
+          [
+            {
+              info: true,
+              icon: '⚠',
+              title: '这是验证码页面',
+              subtitle: '请点击验证码输入框，再选择「填充 MFA 验证码」',
+            },
+          ],
+          '由起飞密码箱填充 · v13',
+        );
       } else if (focused && isUsernameCandidate(focused) && !isOtpField(focused)) {
         filled = forceFill(focused, item.username ?? '');
       } else {
@@ -453,7 +468,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充 · v12',
+      '由起飞密码箱填充 · v13',
     );
   };
 
@@ -497,7 +512,7 @@
           },
         },
       ],
-      '由起飞密码箱填充 · v12',
+      '由起飞密码箱填充 · v13',
     );
   };
 
@@ -533,6 +548,18 @@
   };
 
   const maybeShowForField = async (field) => {
+    console.log('[FlyPassword] 聚焦字段', {
+      tag: field.tagName,
+      name: field.name,
+      id: field.id,
+      type: field.type,
+      maxLength: field.maxLength,
+      autocomplete: autocompleteHint(field),
+      placeholder: field.placeholder,
+      aria: field.getAttribute('aria-label'),
+      isOtp: isOtpField(field),
+      isUsername: isUsernameCandidate(field),
+    });
     if (isOtpField(field)) {
       let item = pendingOtpItem || lastFilledItem;
       if (!item?.totp_code) {
@@ -600,7 +627,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充 · v12',
+        '由起飞密码箱填充 · v13',
       );
     }
   };
