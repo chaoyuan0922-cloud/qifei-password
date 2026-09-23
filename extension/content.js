@@ -6,6 +6,7 @@
 
   if (window.__flyPasswordInjected) return;
   window.__flyPasswordInjected = true;
+  console.log('[FlyPassword] 内容脚本已加载 · build v11');
 
   const OTP_NAME_PATTERN = /(otp|onetime|one-time|totp|verif|authcode|2fa|mfa|twofactor|two-factor|dynamic)/i;
   const CREDENTIALS_CACHE_TTL = 20000;
@@ -417,6 +418,7 @@
       }
       button.addEventListener('click', (event) => {
         event.preventDefault();
+        console.log('[FlyPassword] 菜单项被点击：', entry.title || entry.subtitle || entry.username || '');
         entry.onPick();
       });
       menu.appendChild(button);
@@ -443,7 +445,7 @@
         badge: item.totp_code ? 'MFA' : null,
         onPick: () => fillCredential(item),
       })),
-      '由起飞密码箱填充',
+      '由起飞密码箱填充 · v11',
     );
   };
 
@@ -487,7 +489,7 @@
           },
         },
       ],
-      '由起飞密码箱填充',
+      '由起飞密码箱填充 · v11',
     );
   };
 
@@ -524,7 +526,13 @@
 
   const maybeShowForField = async (field) => {
     if (isOtpField(field)) {
-      const item = pendingOtpItem || lastFilledItem;
+      let item = pendingOtpItem || lastFilledItem;
+      if (!item?.totp_code) {
+        // Nothing filled on this page load (e.g. full-page navigation to the
+        // MFA step): look up cached credentials for a TOTP-enabled entry.
+        const payload = await requestCredentials();
+        item = (payload?.items ?? []).find((entry) => entry.totp_code) ?? null;
+      }
       if (item?.totp_code) {
         showOtpMenu(field, item);
       }
@@ -584,7 +592,7 @@
             subtitle: '可在应用「设置 → 浏览器扩展」中允许后重试',
           },
         ],
-        '由起飞密码箱填充',
+        '由起飞密码箱填充 · v11',
       );
     }
   };
