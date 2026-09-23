@@ -53,7 +53,7 @@
   const fieldKey = (element) => (element ? `${element.name || ''}|${element.id || ''}|${element.type || ''}` : '');
 
   const LOGIN_LABELS = ['登录', '登 录', 'sign in', 'log in', 'signin', 'login', '进入', '下一步', '继续'];
-  const CONFIRM_LABELS = ['确认', '确定', '验证', '提交', '下一步', '继续', 'verify', 'submit', 'continue', 'confirm', 'next'];
+  const CONFIRM_LABELS = ['确认', '确定', '验证', '提交', '下一步', '继续', '登录', '登 录', 'verify', 'submit', 'continue', 'confirm', 'next'];
 
   const hasCaptchaInput = () =>
     Array.from(document.querySelectorAll('input')).some(
